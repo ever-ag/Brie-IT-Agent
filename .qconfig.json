@@ -1,0 +1,24 @@
+{
+  "aws_profile": "AWSCorp",
+  "project_rules": [
+    "Always use AWSCorp AWS profile for all AWS operations",
+    "Track and document all changes in CHANGELOG.md",
+    "Maintain SOC2 compliance for all code and infrastructure",
+    "No hardcoded secrets - use environment variables or AWS Secrets Manager",
+    "All data must be encrypted at rest and in transit",
+    "Implement proper access controls and least privilege",
+    "Enable audit logging for all operations",
+    "Document security controls and compliance measures"
+  ],
+  "compliance": {
+    "standard": "SOC2",
+    "requirements": [
+      "Data encryption (at rest and in transit)",
+      "Access control and authentication",
+      "Audit logging and monitoring",
+      "Change management and documentation",
+      "Incident response procedures",
+      "Data retention and deletion policies"
+    ]
+  }
+}
