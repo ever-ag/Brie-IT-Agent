@@ -991,7 +991,17 @@ def is_hardware_request(subject, body):
         'replace laptop',
         'new laptop', 
         'hardware request',
-        'laptop swap'
+        'laptop swap',
+        'needs a laptop',
+        'needs a computer',
+        'setup on a laptop',
+        'setup on a computer',
+        'setup on an',
+        'new computer',
+        'needs an ever.ag laptop',
+        'needs an ever.ag computer',
+        'laptop for',
+        'computer for'
     ]
     
     return any(keyword in text for keyword in hardware_keywords)
