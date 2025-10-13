@@ -1,0 +1,77 @@
+{
+  "Comment": "Brie IT Agent Step Functions Workflow - Simplified",
+  "StartAt": "ParseEmail",
+  "States": {
+    "ParseEmail": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-parser",
+      "Next": "CheckEmailExists"
+    },
+    "CheckEmailExists": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.hasEmails",
+          "BooleanEquals": true,
+          "Next": "SearchConfluence"
+        }
+      ],
+      "Default": "NoEmailsFound"
+    },
+    "SearchConfluence": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-confluence-searcher",
+      "Next": "AnalyzeWithClaude"
+    },
+    "AnalyzeWithClaude": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-claude-analyzer",
+      "Next": "DecisionEngine"
+    },
+    "DecisionEngine": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-decision-engine",
+      "Next": "RouteAction"
+    },
+    "RouteAction": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.action",
+          "StringEquals": "SEND_SOLUTION",
+          "Next": "SendSolution"
+        },
+        {
+          "Variable": "$.action",
+          "StringEquals": "ASK_DETAILS",
+          "Next": "AskForDetails"
+        }
+      ],
+      "Default": "JustDelete"
+    },
+    "SendSolution": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+      "Next": "DeleteEmail"
+    },
+    "AskForDetails": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+      "Next": "DeleteEmail"
+    },
+    "JustDelete": {
+      "Type": "Pass",
+      "Next": "DeleteEmail"
+    },
+    "DeleteEmail": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-cleanup",
+      "End": true
+    },
+    "NoEmailsFound": {
+      "Type": "Pass",
+      "Result": {"message": "No unread emails found"},
+      "End": true
+    }
+  }
+}

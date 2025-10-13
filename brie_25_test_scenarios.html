@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Brie IT Agent - 25 Test Scenarios</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+.container { max-width: 1400px; margin: 0 auto; }
+.header { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+.header h1 { margin: 0; color: #2c3e50; }
+.summary { background: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.metric { text-align: center; padding: 20px; background: #f8f9fa; border-radius: 8px; }
+.metric-value { font-size: 36px; font-weight: bold; color: #2c3e50; }
+.metric-label { font-size: 14px; color: #6c757d; margin-top: 5px; }
+.test-case { background: white; padding: 20px; margin-bottom: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+.test-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 15px; border-bottom: 2px solid #e9ecef; }
+.test-id { font-size: 20px; font-weight: bold; color: #2c3e50; }
+.badge { padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 13px; }
+.delete { background: #fee; color: #c00; }
+.respond { background: #efe; color: #060; }
+.ask { background: #ffeaa7; color: #d63031; }
+.email-box { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0; }
+.field { margin: 8px 0; }
+.label { font-weight: bold; color: #495057; }
+.response { background: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin: 15px 0; font-family: monospace; font-size: 13px; white-space: pre-wrap; }
+.no-response { background: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 15px 0; font-style: italic; color: #666; }
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<h1>🤖 Brie IT Agent - Regression Test Report</h1>
+<p>25 Real-World Email Scenarios with Simulated Responses</p>
+<p style="color: #6c757d;">Generated: 2025-10-09 22:08:41</p>
+</div>
+<div class="summary">
+<div class="metric"><div class="metric-value">25</div><div class="metric-label">Total Tests</div></div>
+<div class="metric"><div class="metric-value" style="color: #e74c3c;">9</div><div class="metric-label">Bot Tickets (Deleted)</div></div>
+<div class="metric"><div class="metric-value" style="color: #27ae60;">16</div><div class="metric-label">Real Tickets (Processed)</div></div>
+</div>
+
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #1</div>
+<div class="badge delete">DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> itsupport@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New Ticket [#CorpIT-12345]: I need adobe installed</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">User: I need adobe installed<br><br>This request was created via the IT Helpdesk Slack Bot.</div></div>
+</div>
+<div class="no-response">❌ Email deleted from mailbox - No automated response sent. Left for live help desk agents via ticketing system.</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #2</div>
+<div class="badge delete">DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> itsupport@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New Ticket [#CorpIT-12346]: VPN not connecting</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">User: My VPN won't connect<br><br>This request was created via the IT Helpdesk Slack Bot.</div></div>
+</div>
+<div class="no-response">❌ Email deleted from mailbox - No automated response sent. Left for live help desk agents via ticketing system.</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #3</div>
+<div class="badge delete">DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> itsupport@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New Ticket [#CorpIT-12347]: Printer issues</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">User: Printer not working<br><br>This request was created via the IT Helpdesk Slack Bot.</div></div>
+</div>
+<div class="no-response">❌ Email deleted from mailbox - No automated response sent. Left for live help desk agents via ticketing system.</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #4</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> john.smith@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Password Reset Request</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Hi, I forgot my password and need to reset it urgently.</div></div>
+</div>
+<div class="response">Hello John,
+
+For password resets, please use our self-service portal:
+
+**Steps:**
+1. Go to https://passwordreset.microsoftonline.com
+2. Enter your email: john.smith@ever.ag
+3. Follow verification steps
+4. Create new password
+
+**If self-service doesn't work:**
+- Call IT: 214-807-0784 (emergencies only)
+- Reply to this email for live agent assistance
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #5</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> sarah.jones@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Laptop won't turn on</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">My laptop won't power on this morning. Tried holding power button but nothing.</div></div>
+</div>
+<div class="response">Hello Sarah,
+
+Let's troubleshoot your laptop:
+
+**Try these steps:**
+1. Check power adapter connection (laptop & outlet)
+2. Try different outlet
+3. Look for LED lights on laptop/adapter
+4. If battery is removable: remove it, hold power 30 sec, reconnect
+5. Check if adapter is warm/hot
+
+**Questions:**
+• Any lights when plugged in?
+• Adapter getting warm?
+• Recent updates before this?
+• Laptop age/model?
+
+Reply with details or a live agent will assist.
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #6</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> mike.wilson@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Excel keeps crashing</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Excel crashes when I open large spreadsheets. Urgent - need for presentation.</div></div>
+</div>
+<div class="response">Hello Mike,
+
+Let's fix Excel crashing:
+
+**Quick fixes:**
+1. Restart computer
+2. Open Excel in Safe Mode (hold CTRL while opening)
+3. Disable add-ins: File > Options > Add-ins > Manage COM Add-ins > Uncheck all
+4. Repair Office: Control Panel > Programs > Microsoft Office > Change > Quick Repair
+
+**Questions:**
+• File size/number of rows?
+• Crashes with other files?
+• Error messages?
+• When did this start?
+
+Reply for more help or live agent will assist.
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #7</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> lisa.brown@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Need shared drive access</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">I need access to Finance shared drive. Manager approved.</div></div>
+</div>
+<div class="response">Hello Lisa,
+
+I'll help with troubleshooting, but permissions need a live agent.
+
+**While you wait, check:**
+• Can you access other shared drives?
+• Connected to VPN/corporate network?
+• What error do you see?
+
+**To expedite:**
+• Manager's name who approved
+• Specific folder path needed
+• Read-only or read-write access?
+
+Live agent will process your request.
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #8</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> david.lee@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Outlook not syncing</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Outlook hasn't synced since yesterday. Missing important emails.</div></div>
+</div>
+<div class="response">Hello David,
+
+Let's fix Outlook sync:
+
+**Steps:**
+1. Check internet connection
+2. Click Send/Receive > Update Folder
+3. Restart Outlook
+4. Check Offline Mode: Send/Receive tab > Work Offline (uncheck)
+5. Repair profile: File > Account Settings > select account > Repair
+
+**Questions:**
+• Error messages?
+• Can send but not receive?
+• All folders or specific ones?
+• Desktop or web Outlook?
+
+Reply for assistance or live agent will help.
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #9</div>
+<div class="badge ask">ASK FOR INFO</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> emily.davis@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New employee setup</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Starting Monday, need laptop and access.</div></div>
+</div>
+<div class="response">Hello Emily,
+
+Welcome to Ever.Ag! Need more details:
+
+**Please provide:**
+• Start date (which Monday?)
+• Department & manager name
+• Job title
+• Office location
+• Required software/systems
+• Phone number for coordination
+
+Live agent will coordinate your setup.
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #10</div>
+<div class="badge delete">DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> itsupport@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New Ticket [#CorpIT-12348]: Teams audio</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">User: Nobody can hear me on Teams<br><br>This request was created via the IT Helpdesk Slack Bot.</div></div>
+</div>
+<div class="no-response">❌ Email deleted from mailbox - No automated response sent. Left for live help desk agents via ticketing system.</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #11</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> robert.garcia@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> WiFi disconnecting</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">WiFi drops every 10 minutes. Can't work.</div></div>
+</div>
+<div class="response">Hello Robert,
+
+Let's fix WiFi disconnections:
+
+**Try:**
+1. Forget network & reconnect
+2. Update WiFi drivers
+3. Disable power saving: Device Manager > Network Adapters > Properties > Power Management > uncheck "Allow computer to turn off"
+4. Move closer to access point
+5. Restart router if at home
+
+**Questions:**
+• Office or home WiFi?
+• Other devices having issues?
+• Started after Windows update?
+• Specific times of day?
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #12</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> jennifer.martinez@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Can't access SharePoint</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Access denied error on SharePoint documents.</div></div>
+</div>
+<div class="response">Hello Jennifer,
+
+SharePoint access troubleshooting:
+
+**Check:**
+• Using correct credentials?
+• Try different browser
+• Clear browser cache
+• Access from different device?
+
+**Questions:**
+• Specific site/document?
+• Worked before?
+• Error code shown?
+• Others in team can access?
+
+Live agent will check permissions if needed.
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #13</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> william.rodriguez@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Monitor not working</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Second monitor stopped after Windows update.</div></div>
+</div>
+<div class="response">Hello William,
+
+Monitor troubleshooting:
+
+**Steps:**
+1. Check cable connections
+2. Try different cable/port
+3. Windows key + P > Extend
+4. Update display drivers
+5. Detect displays: Settings > Display > Detect
+
+**Questions:**
+• Monitor power light on?
+• Works on other computer?
+• Cable type (HDMI/DisplayPort)?
+• Laptop or desktop?
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #14</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> amanda.hernandez@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Zoom not working</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Can't join Zoom - account not activated.</div></div>
+</div>
+<div class="response">Hello Amanda,
+
+Zoom activation help:
+
+**Try:**
+1. Check activation email from Zoom
+2. Reset password at zoom.us
+3. Use SSO login with work email
+4. Reinstall Zoom app
+
+**Questions:**
+• New employee?
+• Used Zoom before at Ever.Ag?
+• Error message exact text?
+• Desktop app or web?
+
+Live agent will check account status.
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #15</div>
+<div class="badge delete">DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> itsupport@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New Ticket [#CorpIT-12349]: Need Project</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">User: Need Microsoft Project<br><br>This request was created via the IT Helpdesk Slack Bot.</div></div>
+</div>
+<div class="no-response">❌ Email deleted from mailbox - No automated response sent. Left for live help desk agents via ticketing system.</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #16</div>
+<div class="badge delete">DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> itsupport@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New Ticket [#CorpIT-12350]: Email signature</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">User: How to set email signature?<br><br>This request was created via the IT Helpdesk Slack Bot.</div></div>
+</div>
+<div class="no-response">❌ Email deleted from mailbox - No automated response sent. Left for live help desk agents via ticketing system.</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #17</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> christopher.lopez@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Keyboard not responding</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Keyboard stopped working. Tried unplugging.</div></div>
+</div>
+<div class="response">Hello Christopher,
+
+Keyboard troubleshooting:
+
+**Try:**
+1. Different USB port
+2. Restart computer
+3. Check Device Manager for errors
+4. Test on another computer
+5. Try on-screen keyboard temporarily
+
+**Questions:**
+• Wired or wireless?
+• Any lights on keyboard?
+• Spill or damage?
+• Works in BIOS?
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #18</div>
+<div class="badge ask">ASK FOR INFO</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> jessica.gonzalez@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Need VPN for remote work</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Working remotely next week, need VPN setup.</div></div>
+</div>
+<div class="response">Hello Jessica,
+
+VPN setup information needed:
+
+**Provide:**
+• Manager approval
+• Remote work dates
+• Home internet provider
+• Device (company laptop?)
+• Department
+• Current VPN access status
+
+Live agent will set up VPN access.
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #19</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> matthew.wilson@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Slow computer</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Computer extremely slow for past week. Takes forever to open programs.</div></div>
+</div>
+<div class="response">Hello Matthew,
+
+Performance troubleshooting:
+
+**Try:**
+1. Restart computer
+2. Check Task Manager (Ctrl+Shift+Esc) for high CPU/memory
+3. Close unnecessary programs
+4. Check disk space (need 20% free)
+5. Run Windows Update
+6. Scan for malware
+
+**Questions:**
+• Specific programs slow?
+• Fan noise/heat?
+• Recent software installed?
+• How much RAM/disk space?
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #20</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> ashley.anderson@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Can't print</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Can see printer but nothing prints.</div></div>
+</div>
+<div class="response">Hello Ashley,
+
+Printer troubleshooting:
+
+**Steps:**
+1. Check printer queue - cancel stuck jobs
+2. Restart printer
+3. Set as default printer
+4. Update printer driver
+5. Remove & re-add printer
+
+**Questions:**
+• Network or USB printer?
+• Error in print queue?
+• Others can print to it?
+• Printer display show errors?
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #21</div>
+<div class="badge ask">ASK FOR INFO</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> daniel.thomas@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> Need AutoCAD license</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Need AutoCAD license for new project starting next month.</div></div>
+</div>
+<div class="response">Hello Daniel,
+
+Software license request needs details:
+
+**Provide:**
+• Manager approval
+• Project name/justification
+• License type (full/viewer)
+• Duration needed
+• Budget code
+• Urgency/start date
+
+Live agent will process license request.
+
+---
+Automated by 🤖 Brie IT Agent</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #22</div>
+<div class="badge delete">DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> itsupport@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New Ticket [#CorpIT-12351]: DL access</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">User: Add me to marketing DL<br><br>This request was created via the IT Helpdesk Slack Bot.</div></div>
+</div>
+<div class="no-response">❌ Email deleted from mailbox - No automated response sent. Left for live help desk agents via ticketing system.</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #23</div>
+<div class="badge delete">DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> itsupport@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New Ticket [#CorpIT-12352]: Phone issue</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">User: Desk phone no dial tone<br><br>This request was created via the IT Helpdesk Slack Bot.</div></div>
+</div>
+<div class="no-response">❌ Email deleted from mailbox - No automated response sent. Left for live help desk agents via ticketing system.</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #24</div>
+<div class="badge delete">DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> itsupport@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> New Ticket [#CorpIT-12353]: AWS access</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">User: Need AWS account access<br><br>This request was created via the IT Helpdesk Slack Bot.</div></div>
+</div>
+<div class="no-response">❌ Email deleted from mailbox - No automated response sent. Left for live help desk agents via ticketing system.</div></div>
+<div class="test-case">
+<div class="test-header">
+<div class="test-id">Test #25</div>
+<div class="badge respond">RESPOND & DELETE</div>
+</div>
+<div class="email-box">
+<div class="field"><span class="label">From:</span> nicole.white@ever.ag</div>
+<div class="field"><span class="label">Subject:</span> MFA not working</div>
+<div class="field"><span class="label">Body:</span><br><div style="margin-top:5px;padding:10px;background:white;border-radius:3px;">Can't login - MFA code not arriving on phone.</div></div>
+</div>
+<div class="response">Hello Nicole,
+
+MFA troubleshooting:
+
+**Try:**
+1. Check phone signal/data
+2. Use backup codes if available
+3. Try "I didn't receive a code" option
+4. Check spam/blocked numbers
+5. Use authenticator app if configured
+
+**Questions:**
+• SMS or app-based MFA?
+• Phone number correct in system?
+• Changed phones recently?
+• Can receive other texts?
+
+Call IT: 214-807-0784 for urgent access.
+
+---
+Automated by 🤖 Brie IT Agent</div></div></div></body></html>

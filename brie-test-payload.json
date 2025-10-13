@@ -1,0 +1,10 @@
+{
+  "Records": [
+    {
+      "eventSource": "aws:ses",
+      "ses": {
+        "content": "From: john.doe@ever.ag\nTo: brieitagent@ever.ag\nSubject: Computer won't start\n\nFrom: john.doe@ever.ag\nSubject: Computer won't start\n\nMy computer won't turn on this morning. I pressed the power button but nothing happens. The power light doesn't come on and I don't hear any fans. I tried unplugging it and plugging it back in but still nothing. I have an important presentation today and need help urgently.\n\nPlease help!\n\nJohn Doe\nSales Department"
+      }
+    }
+  ]
+}

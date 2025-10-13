@@ -1,0 +1,204 @@
+{
+    "Comment": "Brie IT Agent Step Functions Workflow - With Distribution List and SSO Group Automation",
+    "StartAt": "ParseEmail",
+    "States": {
+        "ParseEmail": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-parser",
+            "Next": "CheckEmailExists"
+        },
+        "CheckEmailExists": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.hasEmails",
+                    "BooleanEquals": true,
+                    "Next": "SearchConfluence"
+                }
+            ],
+            "Default": "NoEmailsFound"
+        },
+        "SearchConfluence": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-confluence-searcher",
+            "Next": "AnalyzeWithClaude"
+        },
+        "AnalyzeWithClaude": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-claude-analyzer",
+            "Next": "DecisionEngine"
+        },
+        "DecisionEngine": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-decision-engine",
+            "Next": "RouteAction"
+        },
+        "RouteAction": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.action",
+                    "StringEquals": "AUTOMATE_DL_ACCESS",
+                    "Next": "ProcessDLAutomation"
+                },
+                {
+                    "Variable": "$.action",
+                    "StringEquals": "AUTOMATE_SSO_GROUP",
+                    "Next": "ProcessSSOGroup"
+                },
+                {
+                    "Variable": "$.action",
+                    "StringEquals": "SEND_SOLUTION",
+                    "Next": "SendSolution"
+                },
+                {
+                    "Variable": "$.action",
+                    "StringEquals": "ASK_DETAILS",
+                    "Next": "AskForDetails"
+                }
+            ],
+            "Default": "JustDelete"
+        },
+        "ProcessDLAutomation": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:it-action-processor",
+            "Next": "DeleteEmail"
+        },
+        "ProcessSSOGroup": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:it-action-processor",
+            "ResultPath": "$.ssoExtraction",
+            "Next": "ValidateSSORequest"
+        },
+        "ValidateSSORequest": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-ad-group-validator",
+            "InputPath": "$",
+            "ResultPath": "$.validation",
+            "Next": "CheckSSOValidation"
+        },
+        "CheckSSOValidation": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.validation.valid",
+                    "BooleanEquals": true,
+                    "Next": "SendSSOApproval"
+                },
+                {
+                    "Variable": "$.validation.alreadyMember",
+                    "BooleanEquals": true,
+                    "Next": "SendAlreadyMember"
+                }
+            ],
+            "Default": "SendSSOError"
+        },
+        "SendSSOApproval": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+            "Parameters": {
+                "FunctionName": "it-approval-system",
+                "Payload": {
+                    "taskToken.$": "$$.Task.Token",
+                    "ssoGroupRequest.$": "$.ssoExtraction.ssoGroupRequest",
+                    "emailData.$": "$.emailData",
+                    "approvalType": "SSO_GROUP"
+                }
+            },
+            "ResultPath": "$.approval",
+            "Next": "ExecuteSSOOperation",
+            "Catch": [
+                {
+                    "ErrorEquals": ["States.ALL"],
+                    "ResultPath": "$.error",
+                    "Next": "SendSSODenied"
+                }
+            ]
+        },
+        "ExecuteSSOOperation": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-ad-group-manager",
+            "Parameters": {
+                "ssoGroupRequest.$": "$.ssoExtraction.ssoGroupRequest",
+                "emailData.$": "$.emailData",
+                "approvalInfo.$": "$.approval"
+            },
+            "ResultPath": "$.execution",
+            "Next": "SendSSOSuccess"
+        },
+        "SendSSOSuccess": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+            "Parameters": {
+                "emailData.$": "$.emailData",
+                "responseData": {
+                    "subject": "SSO Group Request Completed",
+                    "body.$": "States.Format('Your request has been completed.\n\nUser: {}\nGroup: {}\nAction: {}\n\nThe change has been applied.', $.ssoExtraction.ssoGroupRequest.user_email, $.ssoExtraction.ssoGroupRequest.group_name, $.ssoExtraction.ssoGroupRequest.action)"
+                }
+            },
+            "Next": "DeleteEmail"
+        },
+        "SendAlreadyMember": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+            "Parameters": {
+                "emailData.$": "$.emailData",
+                "responseData": {
+                    "subject": "SSO Group Request",
+                    "body.$": "$.validation.message"
+                }
+            },
+            "Next": "DeleteEmail"
+        },
+        "SendSSOError": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+            "Parameters": {
+                "emailData.$": "$.emailData",
+                "responseData": {
+                    "subject": "SSO Group Request Error",
+                    "body.$": "States.Format('Unable to process request: {}', $.validation.error)"
+                }
+            },
+            "Next": "DeleteEmail"
+        },
+        "SendSSODenied": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+            "Parameters": {
+                "emailData.$": "$.emailData",
+                "responseData": {
+                    "subject": "SSO Group Request Denied",
+                    "body": "Your request was reviewed and denied."
+                }
+            },
+            "Next": "DeleteEmail"
+        },
+        "SendSolution": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+            "Next": "DeleteEmail"
+        },
+        "AskForDetails": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+            "Next": "DeleteEmail"
+        },
+        "JustDelete": {
+            "Type": "Pass",
+            "Next": "DeleteEmail"
+        },
+        "DeleteEmail": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-cleanup",
+            "End": true
+        },
+        "NoEmailsFound": {
+            "Type": "Pass",
+            "Result": {
+                "message": "No unread emails found"
+            },
+            "End": true
+        }
+    }
+}

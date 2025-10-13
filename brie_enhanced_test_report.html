@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Brie IT Agent - Enhanced Test Report</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+            color: #2c3e50;
+        }
+        .summary {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        .metric {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        .metric-label {
+            font-size: 14px;
+            color: #6c757d;
+            margin-bottom: 5px;
+        }
+        .metric-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        .test-case {
+            background: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .test-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e9ecef;
+        }
+        .test-id {
+            font-size: 20px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        .action-badge {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .delete {
+            background: #fee;
+            color: #c00;
+        }
+        .process {
+            background: #efe;
+            color: #060;
+        }
+        .ask-info {
+            background: #ffeaa7;
+            color: #d63031;
+        }
+        .email-details {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .email-field {
+            margin: 8px 0;
+        }
+        .email-label {
+            font-weight: bold;
+            color: #495057;
+        }
+        .response-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+        }
+        .no-response {
+            background: #ffebee;
+            border-left: 4px solid #f44336;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            font-style: italic;
+            color: #666;
+        }
+        .reason {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 10px 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Brie IT Agent - Enhanced Test Report</h1>
+            <p style="font-size: 16px; color: #6c757d; margin: 5px 0;">End-to-End Email Processing Simulation</p>
+            <p style="font-size: 14px; color: #6c757d; margin: 5px 0;">Generated: 2025-10-09 21:57:08</p>
+        </div>
+        
+        <div class="summary">
+            <div class="metric">
+                <div class="metric-label">Total Tests</div>
+                <div class="metric-value">8</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">Bot-Generated (Deleted)</div>
+                <div class="metric-value" style="color: #e74c3c;">2</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">Real Tickets (Processed)</div>
+                <div class="metric-value" style="color: #27ae60;">6</div>
+            </div>
+        </div>
+
+        <div class="test-case">
+            <div class="test-header">
+                <div class="test-id">Test #1</div>
+                <div class="action-badge delete">DELETE</div>
+            </div>
+            
+            <div class="email-details">
+                <div class="email-field">
+                    <span class="email-label">From:</span> itsupport@ever.ag
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Subject:</span> New Ticket [#CorpIT-12345]: I need adobe installed
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Body:</span><br>
+                    <div style="margin-top: 5px; padding: 10px; background: white; border-radius: 3px;">
+                        User: I need adobe installed on my laptop<br><br>This request was created via the IT Helpdesk Slack Bot.
+                    </div>
+                </div>
+            </div>
+            
+            <div class="reason">
+                <strong>Processing Logic:</strong> Bot-generated ticket - deleted from mailbox, left for live agents
+            </div>
+
+            <div class="no-response">
+                No response sent - Email deleted from mailbox, left for live help desk agents to handle via ticketing system
+            </div>
+
+        </div>
+
+        <div class="test-case">
+            <div class="test-header">
+                <div class="test-id">Test #2</div>
+                <div class="action-badge delete">DELETE</div>
+            </div>
+            
+            <div class="email-details">
+                <div class="email-field">
+                    <span class="email-label">From:</span> itsupport@ever.ag
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Subject:</span> New Ticket [#CorpIT-12346]: Add me to salesforce group
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Body:</span><br>
+                    <div style="margin-top: 5px; padding: 10px; background: white; border-radius: 3px;">
+                        User: Can you add me to the salesforce SSO group?<br><br>This request was created via the IT Helpdesk Slack Bot.
+                    </div>
+                </div>
+            </div>
+            
+            <div class="reason">
+                <strong>Processing Logic:</strong> Bot-generated ticket - deleted from mailbox, left for live agents
+            </div>
+
+            <div class="no-response">
+                No response sent - Email deleted from mailbox, left for live help desk agents to handle via ticketing system
+            </div>
+
+        </div>
+
+        <div class="test-case">
+            <div class="test-header">
+                <div class="test-id">Test #3</div>
+                <div class="action-badge process">RESPOND & DELETE</div>
+            </div>
+            
+            <div class="email-details">
+                <div class="email-field">
+                    <span class="email-label">From:</span> john.smith@ever.ag
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Subject:</span> Password Reset Request
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Body:</span><br>
+                    <div style="margin-top: 5px; padding: 10px; background: white; border-radius: 3px;">
+                        Hi, I forgot my password and need to reset it. Can you help?
+                    </div>
+                </div>
+            </div>
+            
+            <div class="reason">
+                <strong>Processing Logic:</strong> Password reset - automated response with self-service instructions
+            </div>
+
+            <div style="margin-top: 15px;">
+                <strong>Automated Response Sent:</strong>
+                <div class="response-box">Hello John,
+
+For password resets, please follow these steps:
+
+1. Go to https://passwordreset.microsoftonline.com
+2. Enter your email address (john.smith@ever.ag)
+3. Follow the verification steps
+4. Create your new password
+
+If you're unable to reset your password using the self-service portal:
+- Call IT Support: 214-807-0784 (emergencies only)
+- Or reply to this email and a live agent will assist you
+
+---
+Automated by 🤖 Brie IT Agent</div>
+            </div>
+
+        </div>
+
+        <div class="test-case">
+            <div class="test-header">
+                <div class="test-id">Test #4</div>
+                <div class="action-badge process">RESPOND & DELETE</div>
+            </div>
+            
+            <div class="email-details">
+                <div class="email-field">
+                    <span class="email-label">From:</span> sarah.jones@ever.ag
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Subject:</span> Laptop won't turn on
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Body:</span><br>
+                    <div style="margin-top: 5px; padding: 10px; background: white; border-radius: 3px;">
+                        My laptop won't power on this morning. I've tried holding the power button but nothing happens.
+                    </div>
+                </div>
+            </div>
+            
+            <div class="reason">
+                <strong>Processing Logic:</strong> Hardware issue - automated troubleshooting steps provided
+            </div>
+
+            <div style="margin-top: 15px;">
+                <strong>Automated Response Sent:</strong>
+                <div class="response-box">Hello Sarah,
+
+Let's troubleshoot your laptop power issue:
+
+**Immediate Steps:**
+1. Ensure the power adapter is firmly connected to both the laptop and wall outlet
+2. Try a different power outlet
+3. Look for any LED lights on the laptop or power adapter
+4. Remove the battery (if removable) and hold power button for 30 seconds, then reconnect
+
+**Questions to help diagnose:**
+• Do you see any lights when plugged in?
+• Is the power adapter warm/hot?
+• Did this happen after any recent updates or changes?
+• How old is the laptop?
+
+Please reply with this information and I'll provide next steps, or a live agent will assist you.
+
+---
+Automated by 🤖 Brie IT Agent</div>
+            </div>
+
+        </div>
+
+        <div class="test-case">
+            <div class="test-header">
+                <div class="test-id">Test #5</div>
+                <div class="action-badge process">RESPOND & DELETE</div>
+            </div>
+            
+            <div class="email-details">
+                <div class="email-field">
+                    <span class="email-label">From:</span> mike.wilson@ever.ag
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Subject:</span> Excel keeps crashing
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Body:</span><br>
+                    <div style="margin-top: 5px; padding: 10px; background: white; border-radius: 3px;">
+                        Excel crashes every time I try to open a large spreadsheet. This is urgent as I need it for a presentation.
+                    </div>
+                </div>
+            </div>
+            
+            <div class="reason">
+                <strong>Processing Logic:</strong> Application issue - automated troubleshooting with follow-up questions
+            </div>
+
+            <div style="margin-top: 15px;">
+                <strong>Automated Response Sent:</strong>
+                <div class="response-box">Hello Mike,
+
+Let's resolve your Excel crashing issue:
+
+**Quick Fixes:**
+1. Close all Excel windows and restart your computer
+2. Open Excel in Safe Mode: Hold CTRL while opening Excel
+3. Disable add-ins: File > Options > Add-ins > Manage: COM Add-ins > Go > Uncheck all
+4. Repair Office: Control Panel > Programs > Microsoft Office > Change > Quick Repair
+
+**Questions:**
+• How large is the spreadsheet (file size/rows)?
+• Does it crash with other Excel files?
+• Any error messages displayed?
+• When did this start happening?
+
+Reply with details and I'll provide additional steps, or a live agent will assist.
+
+---
+Automated by 🤖 Brie IT Agent</div>
+            </div>
+
+        </div>
+
+        <div class="test-case">
+            <div class="test-header">
+                <div class="test-id">Test #6</div>
+                <div class="action-badge process">RESPOND & DELETE</div>
+            </div>
+            
+            <div class="email-details">
+                <div class="email-field">
+                    <span class="email-label">From:</span> lisa.brown@ever.ag
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Subject:</span> Need access to shared drive
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Body:</span><br>
+                    <div style="margin-top: 5px; padding: 10px; background: white; border-radius: 3px;">
+                        I need access to the Finance shared drive. My manager approved this request.
+                    </div>
+                </div>
+            </div>
+            
+            <div class="reason">
+                <strong>Processing Logic:</strong> Permission request - partial automation, routed to live agent
+            </div>
+
+            <div style="margin-top: 15px;">
+                <strong>Automated Response Sent:</strong>
+                <div class="response-box">Hello Lisa,
+
+I can help with a few technical troubleshooting steps, but I'll leave your permissions-related question for a live help desk agent.
+
+**While you wait, verify:**
+• Can you access other shared drives?
+• Are you connected to the corporate network/VPN?
+• What error message do you see when trying to access?
+
+**To expedite your request, please provide:**
+• Your manager's name who approved this
+• Specific Finance folder path you need access to
+• Whether you need read-only or read-write access
+
+A live help desk agent will process your access request and follow up with you.
+
+---
+Automated by 🤖 Brie IT Agent</div>
+            </div>
+
+        </div>
+
+        <div class="test-case">
+            <div class="test-header">
+                <div class="test-id">Test #7</div>
+                <div class="action-badge process">RESPOND & DELETE</div>
+            </div>
+            
+            <div class="email-details">
+                <div class="email-field">
+                    <span class="email-label">From:</span> david.lee@ever.ag
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Subject:</span> Outlook not syncing
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Body:</span><br>
+                    <div style="margin-top: 5px; padding: 10px; background: white; border-radius: 3px;">
+                        My Outlook hasn't synced emails since yesterday. I'm missing important messages.
+                    </div>
+                </div>
+            </div>
+            
+            <div class="reason">
+                <strong>Processing Logic:</strong> Email sync issue - automated troubleshooting steps
+            </div>
+
+            <div style="margin-top: 15px;">
+                <strong>Automated Response Sent:</strong>
+                <div class="response-box">Hello David,
+
+Let's fix your Outlook sync issue:
+
+**Troubleshooting Steps:**
+1. Check your internet connection
+2. Click Send/Receive > Update Folder
+3. Restart Outlook completely
+4. Check if you're in Offline Mode: Send/Receive tab > Work Offline (should be unchecked)
+5. Repair your Outlook profile: File > Account Settings > Account Settings > select account > Repair
+
+**Questions:**
+• Are you seeing any error messages?
+• Can you send emails but not receive?
+• Is this affecting all folders or specific ones?
+• Are you using Outlook desktop or web?
+
+Reply with details for further assistance, or a live agent will help you.
+
+---
+Automated by 🤖 Brie IT Agent</div>
+            </div>
+
+        </div>
+
+        <div class="test-case">
+            <div class="test-header">
+                <div class="test-id">Test #8</div>
+                <div class="action-badge ask-info">ASK FOR MORE INFO</div>
+            </div>
+            
+            <div class="email-details">
+                <div class="email-field">
+                    <span class="email-label">From:</span> emily.davis@ever.ag
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Subject:</span> New employee setup
+                </div>
+                <div class="email-field">
+                    <span class="email-label">Body:</span><br>
+                    <div style="margin-top: 5px; padding: 10px; background: white; border-radius: 3px;">
+                        I'm starting Monday and need my laptop, email, and system access set up.
+                    </div>
+                </div>
+            </div>
+            
+            <div class="reason">
+                <strong>Processing Logic:</strong> Insufficient details - requesting more information before routing
+            </div>
+
+            <div style="margin-top: 15px;">
+                <strong>Automated Response Sent:</strong>
+                <div class="response-box">Hello Emily,
+
+Welcome to Ever.Ag! To set up your equipment and access, I need a few more details:
+
+**Please provide:**
+• Your start date (you mentioned Monday - which date?)
+• Your department and manager's name
+• Your job title
+• Office location where you'll be working
+• Any specific software or systems you'll need access to
+• Your personal phone number for coordination
+
+Once I have this information, a live help desk agent will coordinate your setup and ensure everything is ready for your first day.
+
+---
+Automated by 🤖 Brie IT Agent</div>
+            </div>
+
+        </div>
+
+    </div>
+</body>
+</html>

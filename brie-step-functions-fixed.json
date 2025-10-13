@@ -1,0 +1,202 @@
+{
+  "Comment": "Brie IT Agent Step Functions Workflow",
+  "StartAt": "ParseEmail",
+  "States": {
+    "ParseEmail": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-parser",
+      "Next": "CheckEmailExists",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "EmailParseFailure"
+        }
+      ]
+    },
+    "CheckEmailExists": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.hasEmails",
+          "BooleanEquals": true,
+          "Next": "ParallelSearch"
+        }
+      ],
+      "Default": "NoEmailsFound"
+    },
+    "ParallelSearch": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "SearchConfluence",
+          "States": {
+            "SearchConfluence": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-confluence-searcher",
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "ConfluenceFailure"
+                }
+              ]
+            },
+            "ConfluenceFailure": {
+              "Type": "Pass",
+              "Result": {"confluenceResult": null},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "AnalyzeWithClaude",
+          "States": {
+            "AnalyzeWithClaude": {
+              "Type": "Task",
+              "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-claude-analyzer",
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "ClaudeFailure"
+                }
+              ]
+            },
+            "ClaudeFailure": {
+              "Type": "Pass",
+              "Result": {"claudeResult": {"isSufficient": false, "questions": []}},
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "CombineResults"
+    },
+    "CombineResults": {
+      "Type": "Pass",
+      "Parameters": {
+        "emailData.$": "$.emailData",
+        "confluenceResult.$": "$[0].confluenceResult",
+        "claudeResult.$": "$[1].claudeResult"
+      },
+      "Next": "DecisionEngine"
+    },
+    "DecisionEngine": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-decision-engine",
+      "Next": "RouteAction",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ]
+    },
+    "RouteAction": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.action",
+          "StringEquals": "SEND_SOLUTION",
+          "Next": "SendSolution"
+        },
+        {
+          "Variable": "$.action",
+          "StringEquals": "ASK_DETAILS",
+          "Next": "AskForDetails"
+        }
+      ],
+      "Default": "JustDelete"
+    },
+    "SendSolution": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+      "Next": "DeleteEmail",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeleteEmail"
+        }
+      ]
+    },
+    "AskForDetails": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-sender",
+      "Next": "DeleteEmail",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeleteEmail"
+        }
+      ]
+    },
+    "JustDelete": {
+      "Type": "Pass",
+      "Next": "DeleteEmail"
+    },
+    "DeleteEmail": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:843046951786:function:brie-email-cleanup",
+      "End": true,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ]
+    },
+    "NoEmailsFound": {
+      "Type": "Pass",
+      "Result": {"message": "No unread emails found"},
+      "End": true
+    },
+    "EmailParseFailure": {
+      "Type": "Fail",
+      "Cause": "Failed to parse email after retries"
+    }
+  }
+}
