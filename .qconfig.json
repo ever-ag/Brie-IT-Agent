@@ -1,6 +1,7 @@
 {
   "aws_profile": "AWSCorp",
   "project_rules": [
+    "After learning the repo, connect to AWS account using AWSCorp profile",
     "Always use AWSCorp AWS profile for all AWS operations",
     "Track and document all changes in CHANGELOG.md",
     "Maintain SOC2 compliance for all code and infrastructure",
