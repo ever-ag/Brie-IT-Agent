@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Removed false "cannot view images" messaging - bot now correctly processes images with Claude Vision without claiming it can't see them
 - Hardware detection now catches tickets like "Rachel Ranslow needs to be setup on an Ever.ag laptop" (previously missed)
 - Daily admin task detection now catches "Daily Admin Non-billable task" variations
+- IT helpdesk bot now correctly extracts distribution list names (was defaulting to "IT email list")
+- IT helpdesk bot now handles bulk distribution list updates (add/remove multiple people)
+
+### Added
+- Bulk distribution list update detection - creates tickets for complex multi-person changes
+- Better error handling when distribution list name cannot be extracted
 
 ### Changed
 - Expanded hardware request detection keywords to catch more variations including "needs a laptop", "setup on a computer", "laptop for [person]", etc.
