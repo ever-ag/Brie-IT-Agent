@@ -1892,7 +1892,14 @@ def has_microsoft_access_denied(subject, body):
 def is_daily_admin_task(subject, body):
     """Detect if this is a daily admin task that should just be deleted"""
     text = f"{subject} {body}".lower()
-    return 'daily admin task' in text
+    
+    admin_task_keywords = [
+        'daily admin task',
+        'daily admin non-billable task',
+        'non-billable task'
+    ]
+    
+    return any(keyword in text for keyword in admin_task_keywords)
 
 def is_sso_group_request(subject, body):
     """Detect SSO group access requests that can be automated"""

@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - Removed false "cannot view images" messaging - bot now correctly processes images with Claude Vision without claiming it can't see them
 - Hardware detection now catches tickets like "Rachel Ranslow needs to be setup on an Ever.ag laptop" (previously missed)
+- Daily admin task detection now catches "Daily Admin Non-billable task" variations
 
 ### Changed
 - Expanded hardware request detection keywords to catch more variations including "needs a laptop", "setup on a computer", "laptop for [person]", etc.
