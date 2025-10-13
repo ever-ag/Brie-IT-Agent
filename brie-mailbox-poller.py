@@ -537,18 +537,11 @@ def has_image_attachment(subject, body):
 def generate_specific_questions(subject, description, sender_email):
     """Generate specific questions using Claude AI based on the issue type"""
     try:
-        # Check if user attached images we can't see
-        has_images = has_image_attachment(subject, description)
-        
-        image_note = ""
-        if has_images:
-            image_note = "\nIMPORTANT: The user has attached images/screenshots that our automated system cannot view. Make sure to ask for the exact text of any error messages shown in the images."
-        
         # Use Claude to generate context-specific questions
         prompt = f"""You are an IT support specialist. A user has submitted this ticket:
 
 Subject: {subject}
-Description: {description}{image_note}
+Description: {description}
 
 Generate a helpful response that includes:
 1. 2-3 specific diagnostic questions to understand the problem better
@@ -559,7 +552,6 @@ Format your response as bullet points starting with • for questions and ◦ fo
 Focus on the specific technology, software, or hardware mentioned in the ticket.
 Make the troubleshooting steps simple and safe for non-technical users.
 IMPORTANT: Do not suggest "Run as administrator" or any admin-level actions as users do not have admin access.
-{f"CRITICAL: If the user attached images/screenshots, you MUST ask them to type out the exact error message text since we cannot view images." if has_images else ""}
 
 Example format:
 • What specific error message appears when you try to open Excel?
