@@ -513,13 +513,18 @@
                     const msgClass = msg.from === 'user' ? 'user' : 'bot';
                     const label = msg.from === 'user' ? 'User' : 'Brie';
                     
-                    // Handle both old (ISO string) and new (timestamp_ms) formats
+                    // Handle multiple timestamp formats
                     let date;
                     if (msg.timestamp_ms) {
                         // New format: Unix epoch in milliseconds
                         date = new Date(msg.timestamp_ms);
-                    } else if (msg.timestamp) {
-                        // Old format: ISO string - add 'Z' for UTC if not present
+                    } else if (typeof msg.timestamp === 'number') {
+                        // Unix epoch - check if seconds or milliseconds
+                        // If less than year 2100 in milliseconds (4102444800000), it's probably seconds
+                        const ts = msg.timestamp < 4102444800 ? msg.timestamp * 1000 : msg.timestamp;
+                        date = new Date(ts);
+                    } else if (typeof msg.timestamp === 'string') {
+                        // ISO string - add 'Z' for UTC if not present
                         const isoString = msg.timestamp.endsWith('Z') ? msg.timestamp : msg.timestamp + 'Z';
                         date = new Date(isoString);
                     } else {
