@@ -105,10 +105,18 @@ def update_conversation(interaction_id, timestamp, message_text, from_bot=False,
         
         # Redact sensitive data before storing
         redacted_message = redact_sensitive_data(message_text[:500])
-        history.append({'timestamp': datetime.utcnow().isoformat(), 'message': redacted_message, 'from': 'bot' if from_bot else 'user'})
+        
+        # Store timestamp in both ISO format and Unix epoch for frontend compatibility
+        now = datetime.utcnow()
+        history.append({
+            'timestamp': now.isoformat(),
+            'timestamp_ms': int(now.timestamp() * 1000),  # Unix epoch in milliseconds for JavaScript
+            'message': redacted_message,
+            'from': 'bot' if from_bot else 'user'
+        })
         
         update_expr = 'SET conversation_history = :hist, last_updated = :updated'
-        expr_values = {':hist': json.dumps(history), ':updated': datetime.utcnow().isoformat()}
+        expr_values = {':hist': json.dumps(history), ':updated': now.isoformat()}
         
         if outcome:
             update_expr += ', outcome = :outcome'
