@@ -13,11 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - IT helpdesk bot now correctly extracts distribution list names (was defaulting to "IT email list")
 - IT helpdesk bot now handles bulk distribution list updates (add/remove multiple people)
 - Fixed "Invalid Date" in conversation history - now stores Unix epoch timestamps for JavaScript compatibility
+- Fixed dashboard date parsing to handle both old (ISO) and new (timestamp_ms) formats
 
 ### Added
 - Bulk distribution list update detection - creates tickets for complex multi-person changes
 - Better error handling when distribution list name cannot be extracted
 - Unix epoch timestamps (timestamp_ms) in conversation history for frontend date parsing
+- Backward-compatible date parsing in dashboard for existing conversations
 
 ### Changed
 - Expanded hardware request detection keywords to catch more variations including "needs a laptop", "setup on a computer", "laptop for [person]", etc.
