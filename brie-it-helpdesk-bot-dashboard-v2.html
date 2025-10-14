@@ -462,7 +462,8 @@
             const displayItems = interactions.slice(startIndex, endIndex);
             
             tbody.innerHTML = displayItems.map(item => {
-                const date = new Date(item.date).toLocaleString('en-US', { timeZone: 'America/Chicago' });
+                // Parse date as UTC and convert to CST
+                const date = new Date(item.date + 'Z').toLocaleString('en-US', { timeZone: 'America/Chicago' });
                 let badgeClass = 'badge-info';
                 if (item.outcome === 'Resolved by Brie') badgeClass = 'badge-success';
                 else if (item.outcome === 'Self-Service Solution') badgeClass = 'badge-info';
