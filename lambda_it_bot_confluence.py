@@ -50,8 +50,10 @@ def get_or_create_conversation(user_id, user_name, message_text):
             last_msg_time = to_float(last_msg_time)
             time_since_last = datetime.utcnow().timestamp() - last_msg_time
             
-            # If conversation is active (< 15 min since last message) and not closed
-            if time_since_last < (15 * 60) and recent.get('outcome') not in ['Ticket Created', 'Self-Service Solution', 'Resolved by Brie', 'Timed Out - No Response', 'Escalated to IT']:
+            # If conversation is active (< 15 min since last message) and not closed or awaiting approval
+            if (time_since_last < (15 * 60) and 
+                recent.get('outcome') not in ['Ticket Created', 'Self-Service Solution', 'Resolved by Brie', 'Timed Out - No Response', 'Escalated to IT', 'Awaiting Approval'] and
+                not recent.get('awaiting_approval')):
                 return recent['interaction_id'], recent['timestamp'], False
             
             # If conversation closed recently (< 24 hours), offer to resume
