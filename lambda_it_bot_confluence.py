@@ -56,8 +56,10 @@ def get_or_create_conversation(user_id, user_name, message_text):
                 not recent.get('awaiting_approval')):
                 return recent['interaction_id'], recent['timestamp'], False
             
-            # If conversation closed recently (< 24 hours), offer to resume
-            if time_since_last < (24 * 60 * 60) and recent.get('outcome') in ['Timed Out - No Response', 'Self-Service Solution']:
+            # If conversation closed recently (< 24 hours), offer to resume (but not if awaiting approval)
+            if (time_since_last < (24 * 60 * 60) and 
+                recent.get('outcome') in ['Timed Out - No Response', 'Self-Service Solution'] and
+                not recent.get('awaiting_approval')):
                 # Return special flag to trigger resumption prompt
                 return recent['interaction_id'], recent['timestamp'], 'needs_resumption'
         
