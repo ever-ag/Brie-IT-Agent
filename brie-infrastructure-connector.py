@@ -14,7 +14,7 @@ import time
 # Configuration
 BESPIN_INSTANCE_ID = "i-0dca7766c8de43f08"  # Bespin domain controller
 DOMAIN_NAME = "everagglobal.com"
-SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', 'SLACK_BOT_TOKEN')
+SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
 IT_APPROVAL_CHANNEL = "C09KB40PL9J"
 
 def send_slack_message(channel, text):
@@ -44,7 +44,7 @@ def get_graph_access_token():
     # Dedicated credentials for IT Group Management
     TENANT_ID = "3d90a358-2976-40f4-8588-45ed47a26302"
     CLIENT_ID = "c33fc45c-9313-4f45-ac31-baf568616137"  # Brie-IT-Automation-Group-Manager
-    CLIENT_SECRET = os.environ.get('GROUP_CLIENT_SECRET', 'AZURE_CLIENT_SECRET')
+    CLIENT_SECRET = os.environ.get('GROUP_CLIENT_SECRET', '')
     
     url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
     
@@ -874,6 +874,28 @@ Disconnect-ExchangeOnline -Confirm:$false
                     
                     send_slack_message(channel, user_msg)
                     send_slack_message(IT_APPROVAL_CHANNEL, it_msg)
+                    
+                    # Send callback to it-helpdesk-bot to update conversation
+                    try:
+                        import boto3
+                        lambda_client = boto3.client('lambda')
+                        slack_context = email_details.get('slackContext', {})
+                        if slack_context.get('user_id'):
+                            lambda_client.invoke(
+                                FunctionName='it-helpdesk-bot',
+                                InvocationType='Event',
+                                Payload=json.dumps({
+                                    'callback_result': True,
+                                    'result_data': {
+                                        'slackContext': slack_context,
+                                        'message': user_msg,
+                                        'status': 'completed'
+                                    }
+                                })
+                            )
+                            print(f"✅ Sent callback to it-helpdesk-bot for user {slack_context.get('user_id')}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to send callback: {e}")
                 elif channel and not success:
                     # Send to user
                     user_msg = f"❌ **Request Failed**\n\nUnable to add you to **{group_name}**.\n\nError: {message}"
