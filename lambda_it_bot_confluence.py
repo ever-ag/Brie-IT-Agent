@@ -277,7 +277,7 @@ def handle_resolution_button(action_id, user_id, channel):
 def categorize_interaction(message_text):
     """Auto-categorize interaction type"""
     text = message_text.lower()
-    if any(kw in text for kw in ['distribution list', 'dl ', 'shared mailbox', 'sso', 'access to']):
+    if any(kw in text for kw in ['distribution list', ' dl', 'shared mailbox', 'sso', 'access to']):
         return "Access Management"
     elif any(kw in text for kw in ['excel', 'word', 'outlook', 'powerpoint', 'teams', 'slack']):
         return "Application Support"
