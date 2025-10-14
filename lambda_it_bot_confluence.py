@@ -112,7 +112,7 @@ def redact_sensitive_data(text):
     
     return text
 
-def update_conversation(interaction_id, timestamp, message_text, from_bot=False, outcome=None, awaiting_approval=None):
+def update_conversation(interaction_id, timestamp, message_text, from_bot=False, outcome=None, awaiting_approval=None, update_last_message=True):
     """Update existing conversation"""
     try:
         response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': timestamp})
@@ -137,12 +137,20 @@ def update_conversation(interaction_id, timestamp, message_text, from_bot=False,
             'from': 'bot' if from_bot else 'user'
         })
         
-        update_expr = 'SET conversation_history = :hist, last_updated = :updated, last_message_timestamp = :last_msg'
-        expr_values = {
-            ':hist': json.dumps(history), 
-            ':updated': now.isoformat(),
-            ':last_msg': int(now.timestamp())
-        }
+        # Only update last_message_timestamp if requested (skip for engagement prompts)
+        if update_last_message:
+            update_expr = 'SET conversation_history = :hist, last_updated = :updated, last_message_timestamp = :last_msg'
+            expr_values = {
+                ':hist': json.dumps(history), 
+                ':updated': now.isoformat(),
+                ':last_msg': int(now.timestamp())
+            }
+        else:
+            update_expr = 'SET conversation_history = :hist, last_updated = :updated'
+            expr_values = {
+                ':hist': json.dumps(history), 
+                ':updated': now.isoformat()
+            }
         
         if outcome:
             update_expr += ', outcome = :outcome'
@@ -257,8 +265,9 @@ def schedule_auto_resolve(interaction_id, timestamp, user_id):
         
         current_time = datetime.utcnow()
         
-        # Schedule first engagement prompt at 5 minutes
-        schedule_time_1 = current_time + timedelta(minutes=5)
+        # TESTING: 1, 2, 3 minute intervals (change back to 5, 10, 15 after testing)
+        # Schedule first engagement prompt at 1 minute
+        schedule_time_1 = current_time + timedelta(minutes=1)
         scheduler.create_schedule(
             Name=f"engagement-1-{interaction_id}-{timestamp}",
             ScheduleExpression=f"at({schedule_time_1.strftime('%Y-%m-%dT%H:%M:%S')})",
@@ -276,8 +285,8 @@ def schedule_auto_resolve(interaction_id, timestamp, user_id):
             FlexibleTimeWindow={'Mode': 'OFF'}
         )
         
-        # Schedule second engagement prompt at 10 minutes
-        schedule_time_2 = current_time + timedelta(minutes=10)
+        # Schedule second engagement prompt at 2 minutes
+        schedule_time_2 = current_time + timedelta(minutes=2)
         scheduler.create_schedule(
             Name=f"engagement-2-{interaction_id}-{timestamp}",
             ScheduleExpression=f"at({schedule_time_2.strftime('%Y-%m-%dT%H:%M:%S')})",
@@ -295,8 +304,8 @@ def schedule_auto_resolve(interaction_id, timestamp, user_id):
             FlexibleTimeWindow={'Mode': 'OFF'}
         )
         
-        # Schedule auto-resolve at 15 minutes
-        schedule_time_3 = current_time + timedelta(minutes=15)
+        # Schedule auto-resolve at 3 minutes
+        schedule_time_3 = current_time + timedelta(minutes=3)
         scheduler.create_schedule(
             Name=f"auto-resolve-{interaction_id}-{timestamp}",
             ScheduleExpression=f"at({schedule_time_3.strftime('%Y-%m-%dT%H:%M:%S')})",
@@ -2537,8 +2546,8 @@ I've sent your request to the IT team for approval. You'll be notified once they
                 last_msg_time = to_float(last_msg_time)
                 time_since_last = datetime.utcnow().timestamp() - last_msg_time
                 
-                # Calculate expected delay based on prompt number
-                expected_delay = prompt_number * 5 * 60  # 5 or 10 minutes
+                # Calculate expected delay based on prompt number (TESTING: 1 or 2 minutes)
+                expected_delay = prompt_number * 1 * 60  # 1 or 2 minutes
                 
                 # Only send prompt if enough time has passed since last message
                 if time_since_last >= (expected_delay - 30):  # 30 second buffer
@@ -2560,7 +2569,7 @@ I've sent your request to the IT team for approval. You'll be notified once they
                         if channel:
                             issue_desc = item.get('description', 'your issue')
                             send_slack_message(channel, f"👋 Are you still there? Do you still need help with {issue_desc}?")
-                            update_conversation(interaction_id, timestamp, f"Engagement prompt {prompt_number} sent", from_bot=True)
+                            update_conversation(interaction_id, timestamp, f"Engagement prompt {prompt_number} sent", from_bot=True, update_last_message=False)
                             print(f"✅ Sent engagement prompt {prompt_number} for {interaction_id}")
                     except Exception as e:
                         print(f"Error sending engagement prompt: {e}")
@@ -2584,8 +2593,8 @@ I've sent your request to the IT team for approval. You'll be notified once they
                     last_msg_time = to_float(last_msg_time)
                     time_since_last = datetime.utcnow().timestamp() - last_msg_time
                     
-                    # Only auto-close if 15 minutes have passed since last message
-                    if time_since_last >= (15 * 60 - 30):  # 30 second buffer
+                    # Only auto-close if 3 minutes have passed since last message (TESTING)
+                    if time_since_last >= (3 * 60 - 30):  # 30 second buffer
                         try:
                             req_data = json.dumps({'users': user_id}).encode('utf-8')
                             req = urllib.request.Request(
