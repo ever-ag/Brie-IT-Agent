@@ -840,6 +840,117 @@ def download_slack_image(image_url):
         print(f"Error downloading image: {str(e)}")
     return None
 
+def get_confluence_images_for_query(user_message, channel):
+    """Search for relevant Confluence page and upload its images to Slack"""
+    try:
+        auth_string = f"{CONFLUENCE_EMAIL}:{CONFLUENCE_API_TOKEN}"
+        auth_bytes = auth_string.encode('ascii')
+        auth_b64 = base64.b64encode(auth_bytes).decode('ascii')
+        
+        # Search for pages matching the query
+        search_query = urllib.parse.quote(f'label=foritchatbot AND text~"{user_message[:50]}"')
+        search_url = f"{CONFLUENCE_BASE_URL}/rest/api/content/search?cql={search_query}&expand=body.storage&limit=1"
+        
+        req = urllib.request.Request(search_url)
+        req.add_header('Authorization', f'Basic {auth_b64}')
+        req.add_header('Accept', 'application/json')
+        
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            results = data.get('results', [])
+            
+            if not results:
+                return 0
+            
+            page = results[0]
+            page_id = page.get('id')
+            content = page.get('body', {}).get('storage', {}).get('value', '')
+            
+            # Extract image filenames
+            image_filenames = extract_confluence_images(content)
+            
+            if not image_filenames:
+                return 0
+            
+            # Download and upload first 2 images (to avoid overwhelming the chat)
+            uploaded_count = 0
+            for filename in image_filenames[:2]:
+                image_data = download_confluence_image(page_id, filename)
+                if image_data:
+                    if upload_image_to_slack(channel, image_data, filename):
+                        uploaded_count += 1
+                        print(f"Uploaded image: {filename}")
+            
+            return uploaded_count
+            
+    except Exception as e:
+        print(f"Error getting Confluence images: {e}")
+        return 0
+
+def extract_confluence_images(html_content):
+    """Extract image filenames from Confluence HTML"""
+    import re
+    images = []
+    # Match Confluence image tags: <ac:image><ri:attachment ri:filename="image.png" /></ac:image>
+    pattern = r'<ri:attachment ri:filename="([^"]+)"'
+    matches = re.findall(pattern, html_content)
+    return matches
+
+def download_confluence_image(page_id, filename):
+    """Download image from Confluence page"""
+    try:
+        auth_string = f"{CONFLUENCE_EMAIL}:{CONFLUENCE_API_TOKEN}"
+        auth_bytes = auth_string.encode('ascii')
+        auth_b64 = base64.b64encode(auth_bytes).decode('ascii')
+        
+        download_url = f"{CONFLUENCE_BASE_URL}/download/attachments/{page_id}/{urllib.parse.quote(filename)}"
+        
+        req = urllib.request.Request(download_url)
+        req.add_header('Authorization', f'Basic {auth_b64}')
+        
+        # Follow redirects and download
+        with urllib.request.urlopen(req) as response:
+            return response.read()
+    except Exception as e:
+        print(f"Error downloading image {filename}: {e}")
+        return None
+
+def upload_image_to_slack(channel, image_data, filename):
+    """Upload image to Slack channel"""
+    try:
+        url = "https://slack.com/api/files.upload"
+        
+        # Create multipart form data
+        boundary = f"----WebKitFormBoundary{random.randint(1000000000, 9999999999)}"
+        body = []
+        
+        # Add file data
+        body.append(f'--{boundary}'.encode())
+        body.append(f'Content-Disposition: form-data; name="file"; filename="{filename}"'.encode())
+        body.append(b'Content-Type: image/png')
+        body.append(b'')
+        body.append(image_data)
+        
+        # Add channels
+        body.append(f'--{boundary}'.encode())
+        body.append(b'Content-Disposition: form-data; name="channels"')
+        body.append(b'')
+        body.append(channel.encode())
+        
+        body.append(f'--{boundary}--'.encode())
+        body_bytes = b'\r\n'.join(body)
+        
+        req = urllib.request.Request(url, data=body_bytes)
+        req.add_header('Authorization', f'Bearer {SLACK_BOT_TOKEN}')
+        req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
+        
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result.get('ok', False)
+    except Exception as e:
+        print(f"Error uploading image to Slack: {e}")
+        return False
+
 def get_confluence_content():
     """Fetch content from Confluence pages with foritchatbot label"""
     try:
@@ -2391,6 +2502,14 @@ I've sent your request to the IT team for approval. You'll be notified once they
             # Get Claude response with Confluence knowledge and optional image analysis
             claude_response = get_claude_response(user_message, user_name, image_analysis)
             send_slack_message(channel, f"🔧 {claude_response}")
+            
+            # Try to upload relevant images from Confluence
+            try:
+                images_uploaded = get_confluence_images_for_query(user_message, channel)
+                if images_uploaded > 0:
+                    print(f"Uploaded {images_uploaded} images from Confluence")
+            except Exception as e:
+                print(f"Error uploading Confluence images: {e}")
             
             # Update conversation with bot response
             if interaction_id and timestamp:
