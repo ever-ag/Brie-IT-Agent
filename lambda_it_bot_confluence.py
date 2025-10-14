@@ -1753,14 +1753,16 @@ def lambda_handler(event, context):
                         items.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
                         conv = items[0]
                         
-                        # Track the callback message
+                        # Track the callback message and mark as resolved
                         update_conversation(
                             conv['interaction_id'],
                             conv['timestamp'],
                             message,
-                            from_bot=True
+                            from_bot=True,
+                            outcome='Resolved by Brie',
+                            awaiting_approval=False
                         )
-                        print(f"✅ Tracked callback result in conversation")
+                        print(f"✅ Tracked callback result in conversation and marked as resolved")
                 except Exception as e:
                     print(f"⚠️ Error tracking callback result: {e}")
             
