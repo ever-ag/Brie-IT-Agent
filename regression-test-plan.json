@@ -1,0 +1,452 @@
+{
+  "test_plan": {
+    "name": "Brie IT Agent Regression Test Plan",
+    "version": "1.0.0",
+    "date": "2025-10-14",
+    "description": "Comprehensive regression tests for all fixed issues and core functionality"
+  },
+  "test_suites": [
+    {
+      "suite_id": "TS001",
+      "name": "Distribution List Approvals",
+      "description": "Tests for DL request creation, approval, and auto-close functionality",
+      "tests": [
+        {
+          "test_id": "TS001-T001",
+          "name": "DL Request - Single Match",
+          "priority": "HIGH",
+          "user_message": "Add me to the LocalEmployees dl",
+          "expected_results": [
+            "Bot searches for distribution lists",
+            "Bot finds LocalEmployees",
+            "Approval request sent to IT channel",
+            "Conversation marked as 'Awaiting Approval'",
+            "Interaction type = 'Access Management'"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "table": "brie-it-helpdesk-bot-interactions",
+              "fields": {
+                "interaction_type": "Access Management",
+                "outcome": "Awaiting Approval",
+                "awaiting_approval": true
+              }
+            },
+            "slack_message_check": "Distribution List Request Received"
+          }
+        },
+        {
+          "test_id": "TS001-T002",
+          "name": "DL Approval - Auto Close",
+          "priority": "CRITICAL",
+          "prerequisite": "TS001-T001",
+          "action": "Click Approve button in IT channel",
+          "expected_results": [
+            "User receives approval message",
+            "Conversation updated to 'Resolved by Brie'",
+            "awaiting_approval set to false",
+            "IT channel shows approval confirmation"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "table": "brie-it-helpdesk-bot-interactions",
+              "fields": {
+                "outcome": "Resolved by Brie",
+                "awaiting_approval": false
+              }
+            },
+            "slack_message_check": "Your request to join `LocalEmployees` has been approved"
+          }
+        },
+        {
+          "test_id": "TS001-T003",
+          "name": "DL Request - Multiple Matches",
+          "priority": "MEDIUM",
+          "user_message": "Add me to the employees dl",
+          "expected_results": [
+            "Bot searches for distribution lists",
+            "Bot returns list of matching DLs",
+            "User can select specific DL",
+            "Approval request sent after selection"
+          ]
+        }
+      ]
+    },
+    {
+      "suite_id": "TS002",
+      "name": "SSO Group Requests",
+      "description": "Tests for SSO group access requests",
+      "tests": [
+        {
+          "test_id": "TS002-T001",
+          "name": "SSO Group Request",
+          "priority": "HIGH",
+          "user_message": "add me to the clickup sso",
+          "expected_results": [
+            "Bot searches for SSO groups",
+            "Bot finds ClickUp group",
+            "Approval request sent",
+            "Interaction type = 'Access Management'"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "table": "brie-it-helpdesk-bot-interactions",
+              "fields": {
+                "interaction_type": "Access Management",
+                "awaiting_approval": true
+              }
+            }
+          }
+        },
+        {
+          "test_id": "TS002-T002",
+          "name": "SSO Approval - Auto Close",
+          "priority": "CRITICAL",
+          "prerequisite": "TS002-T001",
+          "action": "Approve SSO request",
+          "expected_results": [
+            "User added to SSO group",
+            "Conversation closed with 'Resolved by Brie'",
+            "Callback updates DynamoDB"
+          ]
+        }
+      ]
+    },
+    {
+      "suite_id": "TS003",
+      "name": "Shared Mailbox Requests",
+      "description": "Tests for shared mailbox access",
+      "tests": [
+        {
+          "test_id": "TS003-T001",
+          "name": "Shared Mailbox Request",
+          "priority": "HIGH",
+          "user_message": "Add me to the itsupport@ever.ag shared mailbox",
+          "expected_results": [
+            "Bot processes mailbox request",
+            "Approval request sent",
+            "Interaction type = 'Access Management'"
+          ]
+        }
+      ]
+    },
+    {
+      "suite_id": "TS004",
+      "name": "Application Support - RTD Issues",
+      "description": "Tests for Excel RTD troubleshooting",
+      "tests": [
+        {
+          "test_id": "TS004-T001",
+          "name": "RTD Issue Detection",
+          "priority": "HIGH",
+          "user_message": "I am having RTD issues in Excel",
+          "expected_results": [
+            "Bot detects RTD issue",
+            "Bot provides Confluence wiki solution",
+            "Solution includes 7-step fix",
+            "Interaction type = 'Application Support'"
+          ],
+          "validation": {
+            "response_contains": [
+              "Formula tab",
+              "Calculation Options",
+              "Compatibility Version",
+              "Version 2 (Latest)"
+            ],
+            "dynamodb_check": {
+              "fields": {
+                "interaction_type": "Application Support"
+              }
+            }
+          }
+        },
+        {
+          "test_id": "TS004-T002",
+          "name": "RTD Resolution Confirmation",
+          "priority": "MEDIUM",
+          "prerequisite": "TS004-T001",
+          "action": "Click 'Yes, that worked!' button",
+          "expected_results": [
+            "Conversation marked as 'Self-Service Solution'",
+            "Bot sends confirmation message"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "fields": {
+                "outcome": "Self-Service Solution"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "suite_id": "TS005",
+      "name": "Conversation History & Timestamps",
+      "description": "Tests for proper timestamp display in conversation history",
+      "tests": [
+        {
+          "test_id": "TS005-T001",
+          "name": "Initial Message Timestamp",
+          "priority": "HIGH",
+          "user_message": "test message",
+          "expected_results": [
+            "User message has timestamp field",
+            "User message has timestamp_ms field",
+            "timestamp_ms = timestamp * 1000"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "conversation_history_format": {
+                "timestamp": "number",
+                "timestamp_ms": "number",
+                "message": "string",
+                "from": "user"
+              }
+            }
+          }
+        },
+        {
+          "test_id": "TS005-T002",
+          "name": "Bot Response Timestamp",
+          "priority": "HIGH",
+          "prerequisite": "TS005-T001",
+          "expected_results": [
+            "Bot message has timestamp (ISO string)",
+            "Bot message has timestamp_ms field",
+            "Dashboard displays formatted date (not 'Invalid Date')"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "conversation_history_format": {
+                "timestamp": "string (ISO)",
+                "timestamp_ms": "number",
+                "message": "string",
+                "from": "bot"
+              }
+            },
+            "dashboard_check": "No 'Invalid Date' displayed"
+          }
+        }
+      ]
+    },
+    {
+      "suite_id": "TS006",
+      "name": "Interaction Categorization",
+      "description": "Tests for proper interaction type categorization",
+      "tests": [
+        {
+          "test_id": "TS006-T001",
+          "name": "Access Management - DL",
+          "priority": "HIGH",
+          "user_message": "Add me to the employees dl",
+          "expected_results": [
+            "Interaction type = 'Access Management'"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "fields": {
+                "interaction_type": "Access Management"
+              }
+            }
+          }
+        },
+        {
+          "test_id": "TS006-T002",
+          "name": "Access Management - SSO",
+          "priority": "HIGH",
+          "user_message": "add me to the sso group",
+          "expected_results": [
+            "Interaction type = 'Access Management'"
+          ]
+        },
+        {
+          "test_id": "TS006-T003",
+          "name": "Application Support - Excel",
+          "priority": "HIGH",
+          "user_message": "Excel is not working",
+          "expected_results": [
+            "Interaction type = 'Application Support'"
+          ]
+        },
+        {
+          "test_id": "TS006-T004",
+          "name": "Hardware Support",
+          "priority": "MEDIUM",
+          "user_message": "I need a new laptop",
+          "expected_results": [
+            "Interaction type = 'Hardware Support'"
+          ]
+        },
+        {
+          "test_id": "TS006-T005",
+          "name": "Network & Connectivity",
+          "priority": "MEDIUM",
+          "user_message": "VPN is not connecting",
+          "expected_results": [
+            "Interaction type = 'Network & Connectivity'"
+          ]
+        }
+      ]
+    },
+    {
+      "suite_id": "TS007",
+      "name": "DynamoDB Interaction Logging",
+      "description": "Tests for interaction logging to recent-interactions table",
+      "tests": [
+        {
+          "test_id": "TS007-T001",
+          "name": "Interaction Logged to DynamoDB",
+          "priority": "CRITICAL",
+          "user_message": "test logging",
+          "expected_results": [
+            "Interaction saved to brie-it-helpdesk-bot-interactions",
+            "Entry includes user_id, timestamp, user_name",
+            "Entry includes user_message and bot_response",
+            "Entry includes interaction_type and outcome"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "table": "brie-it-helpdesk-bot-interactions",
+              "required_fields": [
+                "interaction_id",
+                "timestamp",
+                "user_id",
+                "user_name",
+                "interaction_type",
+                "description",
+                "outcome",
+                "conversation_history"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "suite_id": "TS008",
+      "name": "Confluence Integration",
+      "description": "Tests for Confluence wiki content retrieval",
+      "tests": [
+        {
+          "test_id": "TS008-T001",
+          "name": "Confluence Content Retrieval",
+          "priority": "MEDIUM",
+          "user_message": "I am having RTD issues in Excel",
+          "expected_results": [
+            "Bot retrieves content from Confluence",
+            "Response includes wiki-based solution",
+            "Response is specific to Ever.Ag procedures"
+          ],
+          "known_issue": "Confluence API 403 - token expired (Issue #7)"
+        },
+        {
+          "test_id": "TS008-T002",
+          "name": "Confluence Image Upload",
+          "priority": "LOW",
+          "user_message": "I am having RTD issues in Excel",
+          "expected_results": [
+            "Bot searches for relevant images",
+            "Bot uploads up to 2 images to Slack",
+            "Images are from pages with 'foritchatbot' label"
+          ],
+          "known_issue": "Confluence API 403 - token expired (Issue #7)"
+        }
+      ]
+    },
+    {
+      "suite_id": "TS009",
+      "name": "Ticket Creation",
+      "description": "Tests for creating IT support tickets",
+      "tests": [
+        {
+          "test_id": "TS009-T001",
+          "name": "Create Ticket from Conversation",
+          "priority": "HIGH",
+          "user_message": "I need help with my computer",
+          "action": "Click 'Create ticket' button",
+          "expected_results": [
+            "Ticket created in it-helpdesk-tickets table",
+            "Email sent to IT support",
+            "Conversation history included in ticket",
+            "Outcome updated to 'Ticket Created'"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "table": "it-helpdesk-tickets",
+              "required_fields": [
+                "ticket_id",
+                "user_id",
+                "user_name",
+                "user_email",
+                "issue_description",
+                "conversation_history"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "suite_id": "TS010",
+      "name": "Dashboard Functionality",
+      "description": "Tests for Recent Interactions dashboard",
+      "tests": [
+        {
+          "test_id": "TS010-T001",
+          "name": "Dashboard Loads",
+          "priority": "HIGH",
+          "action": "Open https://dyxb7ssm7p469.cloudfront.net/",
+          "expected_results": [
+            "Dashboard loads without errors",
+            "Recent interactions displayed",
+            "All timestamps formatted correctly",
+            "No 'Invalid Date' displayed"
+          ]
+        },
+        {
+          "test_id": "TS010-T002",
+          "name": "Conversation History Display",
+          "priority": "HIGH",
+          "action": "Click on an interaction",
+          "expected_results": [
+            "Conversation history modal opens",
+            "All messages displayed with timestamps",
+            "User and bot messages clearly labeled",
+            "Timestamps in local time format"
+          ]
+        },
+        {
+          "test_id": "TS010-T003",
+          "name": "Filter by Interaction Type",
+          "priority": "MEDIUM",
+          "action": "Filter by 'Access Management'",
+          "expected_results": [
+            "Only Access Management interactions shown",
+            "Count updates correctly"
+          ]
+        }
+      ]
+    }
+  ],
+  "execution_notes": {
+    "prerequisites": [
+      "AWS credentials configured (AWSCorp profile)",
+      "Slack bot token valid",
+      "Test user: Matthew Denecke (UDR6PV7DX)",
+      "IT approval channel: C09KB40PL9J"
+    ],
+    "cleanup": [
+      "Delete test conversations from DynamoDB after each test run",
+      "Clear test approvals from it-actions table"
+    ],
+    "known_issues": [
+      {
+        "issue_id": "#7",
+        "description": "Confluence API 403 Forbidden - token expired",
+        "impact": "Confluence content retrieval and image upload tests will fail",
+        "workaround": "Generate new Confluence API token"
+      }
+    ]
+  }
+}
