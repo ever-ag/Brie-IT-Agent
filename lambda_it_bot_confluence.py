@@ -25,23 +25,34 @@ CONVERSATION_TIMEOUT_MINUTES = 30
 user_conversations = {}  # {user_id: interaction_id}
 
 def get_or_create_conversation(user_id, user_name, message_text):
-    """Get existing conversation or create new one"""
+    """Get existing conversation or create new one with resumption logic"""
     try:
-        timeout_timestamp = int((datetime.utcnow() - timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES)).timestamp())
-        
+        # Look for active conversations (not closed)
         response = interactions_table.scan(
-            FilterExpression='user_id = :uid AND #ts > :timeout',
-            ExpressionAttributeNames={'#ts': 'timestamp'},
-            ExpressionAttributeValues={':uid': user_id, ':timeout': timeout_timestamp}
+            FilterExpression='user_id = :uid',
+            ExpressionAttributeValues={':uid': user_id}
         )
         
         items = response.get('Items', [])
         if items:
             items.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
-            active = items[0]
-            if active.get('outcome') not in ['Ticket Created', 'Self-Service Solution', 'Resolved by Brie']:
-                return active['interaction_id'], active['timestamp'], False
+            
+            # Check most recent conversation
+            recent = items[0]
+            last_msg_time = recent.get('last_message_timestamp', recent.get('timestamp', 0))
+            time_since_last = datetime.utcnow().timestamp() - last_msg_time
+            
+            # If conversation is active (< 15 min since last message) and not closed
+            if time_since_last < (15 * 60) and recent.get('outcome') not in ['Ticket Created', 'Self-Service Solution', 'Resolved by Brie', 'Timed Out - No Response', 'Escalated to IT']:
+                return recent['interaction_id'], recent['timestamp'], False
+            
+            # If conversation closed recently (< 24 hours), ask about resumption
+            if time_since_last < (24 * 60 * 60) and recent.get('outcome') in ['Timed Out - No Response', 'Self-Service Solution']:
+                # Store resumption flag for later handling
+                recent['_needs_resumption_check'] = True
+                return recent['interaction_id'], recent['timestamp'], False
         
+        # Create new conversation
         interaction_id = str(uuid.uuid4())
         timestamp = int(datetime.utcnow().timestamp())
         interaction_type = categorize_interaction(message_text)
@@ -58,6 +69,7 @@ def get_or_create_conversation(user_id, user_name, message_text):
             'description': redacted_message[:200],
             'outcome': 'In Progress',
             'date': datetime.utcnow().isoformat(),
+            'last_message_timestamp': timestamp,
             'conversation_history': json.dumps([{
                 'timestamp': timestamp, 
                 'timestamp_ms': timestamp * 1000,
@@ -120,8 +132,12 @@ def update_conversation(interaction_id, timestamp, message_text, from_bot=False,
             'from': 'bot' if from_bot else 'user'
         })
         
-        update_expr = 'SET conversation_history = :hist, last_updated = :updated'
-        expr_values = {':hist': json.dumps(history), ':updated': now.isoformat()}
+        update_expr = 'SET conversation_history = :hist, last_updated = :updated, last_message_timestamp = :last_msg'
+        expr_values = {
+            ':hist': json.dumps(history), 
+            ':updated': now.isoformat(),
+            ':last_msg': int(now.timestamp())
+        }
         
         if outcome:
             update_expr += ', outcome = :outcome'
@@ -228,24 +244,51 @@ def send_resolution_prompt(channel, user_id, interaction_id, timestamp):
         print(f"Error sending resolution prompt: {e}")
 
 def schedule_auto_resolve(interaction_id, timestamp, user_id):
-    """Schedule auto-resolve after 15 minutes"""
+    """Schedule engagement prompts and auto-resolve"""
     try:
-        # Invoke Lambda async to handle auto-resolve
         lambda_client = boto3.client('lambda')
-        payload = {
-            'auto_resolve': True,
-            'interaction_id': interaction_id,
-            'timestamp': timestamp,
-            'user_id': user_id,
-            'delay_minutes': 15
-        }
         
+        # Schedule first engagement prompt at 5 minutes
         lambda_client.invoke(
             FunctionName=os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'it-helpdesk-bot'),
             InvocationType='Event',
-            Payload=json.dumps(payload)
+            Payload=json.dumps({
+                'engagement_prompt': True,
+                'interaction_id': interaction_id,
+                'timestamp': timestamp,
+                'user_id': user_id,
+                'delay_minutes': 5,
+                'prompt_number': 1
+            })
         )
-        print(f"✅ Scheduled auto-resolve for {interaction_id}")
+        
+        # Schedule second engagement prompt at 10 minutes
+        lambda_client.invoke(
+            FunctionName=os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'it-helpdesk-bot'),
+            InvocationType='Event',
+            Payload=json.dumps({
+                'engagement_prompt': True,
+                'interaction_id': interaction_id,
+                'timestamp': timestamp,
+                'user_id': user_id,
+                'delay_minutes': 10,
+                'prompt_number': 2
+            })
+        )
+        
+        # Schedule auto-resolve at 15 minutes
+        lambda_client.invoke(
+            FunctionName=os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'it-helpdesk-bot'),
+            InvocationType='Event',
+            Payload=json.dumps({
+                'auto_resolve': True,
+                'interaction_id': interaction_id,
+                'timestamp': timestamp,
+                'user_id': user_id,
+                'delay_minutes': 15
+            })
+        )
+        print(f"✅ Scheduled engagement prompts and auto-resolve for {interaction_id}")
     except Exception as e:
         print(f"Error scheduling auto-resolve: {e}")
 
@@ -2445,6 +2488,49 @@ I've sent your request to the IT team for approval. You'll be notified once they
                         # Return immediately to prevent Slack retries
                         return {'statusCode': 200, 'body': 'OK'}
         
+        # Handle engagement prompts
+        elif event.get('engagement_prompt'):
+            delay_minutes = event.get('delay_minutes', 5)
+            time.sleep(delay_minutes * 60)
+            
+            interaction_id = event['interaction_id']
+            timestamp = event['timestamp']
+            user_id = event.get('user_id')
+            prompt_number = event.get('prompt_number', 1)
+            
+            # Check if still in progress and check last message time
+            response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': timestamp})
+            if 'Item' in response:
+                item = response['Item']
+                
+                # Skip if not in progress or awaiting approval
+                if item.get('outcome') != 'In Progress' or item.get('awaiting_approval'):
+                    return {'statusCode': 200, 'body': 'OK'}
+                
+                # Check time since last message
+                last_msg_time = item.get('last_message_timestamp', timestamp)
+                time_since_last = datetime.utcnow().timestamp() - last_msg_time
+                
+                # Only send prompt if enough time has passed since last message
+                if time_since_last >= (delay_minutes * 60 - 30):  # 30 second buffer
+                    try:
+                        im_response = requests.post(
+                            'https://slack.com/api/conversations.open',
+                            headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}', 'Content-Type': 'application/json'},
+                            json={'users': user_id}
+                        )
+                        channel = im_response.json().get('channel', {}).get('id')
+                        
+                        if channel:
+                            issue_desc = item.get('description', 'your issue')
+                            send_slack_message(channel, f"👋 Are you still there? Do you still need help with {issue_desc}?")
+                            update_conversation(interaction_id, timestamp, f"Engagement prompt {prompt_number} sent", from_bot=True)
+                            print(f"✅ Sent engagement prompt {prompt_number} for {interaction_id}")
+                    except Exception as e:
+                        print(f"Error sending engagement prompt: {e}")
+            
+            return {'statusCode': 200, 'body': 'OK'}
+        
         # Handle auto-resolve after timeout
         elif event.get('auto_resolve'):
             delay_minutes = event.get('delay_minutes', 15)
@@ -2460,23 +2546,30 @@ I've sent your request to the IT team for approval. You'll be notified once they
                 item = response['Item']
                 # Skip conversations awaiting approval
                 if item.get('outcome') == 'In Progress' and not item.get('awaiting_approval'):
-                    # Get user's DM channel
-                    try:
-                        im_response = requests.post(
-                            'https://slack.com/api/conversations.open',
-                            headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}', 'Content-Type': 'application/json'},
-                            json={'users': user_id}
-                        )
-                        channel = im_response.json().get('channel', {}).get('id')
-                        
-                        if channel:
-                            send_slack_message(channel, "Your conversation has been automatically closed due to inactivity.")
-                    except Exception as e:
-                        print(f"Error sending auto-close notification: {e}")
+                    # Check time since last message
+                    last_msg_time = item.get('last_message_timestamp', timestamp)
+                    time_since_last = datetime.utcnow().timestamp() - last_msg_time
                     
-                    # Auto-resolve as self-service
-                    update_conversation(interaction_id, timestamp, "Auto-resolved (no response after 15 minutes)", from_bot=True, outcome='Self-Service Solution')
-                    print(f"✅ Auto-resolved {interaction_id}")
+                    # Only auto-close if 15 minutes have passed since last message
+                    if time_since_last >= (15 * 60 - 30):  # 30 second buffer
+                        try:
+                            im_response = requests.post(
+                                'https://slack.com/api/conversations.open',
+                                headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}', 'Content-Type': 'application/json'},
+                                json={'users': user_id}
+                            )
+                            channel = im_response.json().get('channel', {}).get('id')
+                            
+                            if channel:
+                                send_slack_message(channel, "⏱️ Your session has timed out. Conversation closed.")
+                        except Exception as e:
+                            print(f"Error sending auto-close notification: {e}")
+                        
+                        # Auto-close with timeout status
+                        update_conversation(interaction_id, timestamp, "Auto-closed due to inactivity (15 minutes)", from_bot=True, outcome='Timed Out - No Response')
+                        print(f"✅ Auto-closed {interaction_id} due to timeout")
+                    else:
+                        print(f"⏭️ Skipped auto-close for {interaction_id} - recent activity detected")
                 # Check for 7-day timeout on approval conversations
                 elif item.get('outcome') == 'Awaiting Approval' and item.get('awaiting_approval'):
                     conversation_age_days = (datetime.utcnow().timestamp() - timestamp) / 86400
