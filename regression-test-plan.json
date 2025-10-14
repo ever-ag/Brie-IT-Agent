@@ -427,6 +427,110 @@
           ]
         }
       ]
+    },
+    {
+      "suite_id": "TS011",
+      "name": "Production Ticket Validation",
+      "description": "Validates bot performance against real production support tickets",
+      "tests": [
+        {
+          "test_id": "TS011-T001",
+          "name": "Recent Ticket Analysis",
+          "priority": "HIGH",
+          "type": "automated",
+          "action": "Query last 20 production tickets from DynamoDB",
+          "expected_results": [
+            "All tickets have valid interaction_type",
+            "All tickets have outcome status",
+            "Conversation history is complete",
+            "Timestamps are valid"
+          ],
+          "validation": {
+            "dynamodb_query": {
+              "table": "brie-it-helpdesk-bot-interactions",
+              "limit": 20,
+              "checks": [
+                "interaction_type in ['Access Management', 'Application Support', 'Hardware Support', 'Network & Connectivity', 'Account Management', 'General Support']",
+                "outcome in ['Resolved by Brie', 'Self-Service Solution', 'Ticket Created', 'Awaiting Approval', 'In Progress']",
+                "conversation_history is not empty",
+                "timestamp is valid number"
+              ]
+            }
+          }
+        },
+        {
+          "test_id": "TS011-T002",
+          "name": "Categorization Accuracy",
+          "priority": "HIGH",
+          "type": "automated",
+          "action": "Analyze interaction_type distribution in recent tickets",
+          "expected_results": [
+            "Access Management tickets contain keywords: dl, sso, group, mailbox, access",
+            "Application Support tickets contain keywords: excel, rtd, software, app",
+            "Hardware Support tickets contain keywords: laptop, computer, hardware, device",
+            "Network tickets contain keywords: vpn, network, wifi, internet"
+          ],
+          "validation": {
+            "pattern_matching": true,
+            "sample_size": 20
+          }
+        },
+        {
+          "test_id": "TS011-T003",
+          "name": "Approval Workflow Completion",
+          "priority": "CRITICAL",
+          "type": "automated",
+          "action": "Check for stuck approvals (awaiting_approval=true for >24 hours)",
+          "expected_results": [
+            "No approvals stuck for more than 24 hours",
+            "All approved requests have outcome='Resolved by Brie'",
+            "All approved requests have awaiting_approval=false"
+          ],
+          "validation": {
+            "dynamodb_query": {
+              "table": "brie-it-helpdesk-bot-interactions",
+              "filter": "awaiting_approval = true",
+              "time_threshold": 86400
+            }
+          }
+        },
+        {
+          "test_id": "TS011-T004",
+          "name": "Self-Service Success Rate",
+          "priority": "MEDIUM",
+          "type": "automated",
+          "action": "Calculate percentage of Self-Service Solutions vs Ticket Created",
+          "expected_results": [
+            "Self-Service rate >= 30%",
+            "Ticket creation rate <= 50%",
+            "Awaiting approval rate <= 30%"
+          ],
+          "validation": {
+            "metrics": {
+              "self_service_target": 0.30,
+              "ticket_creation_max": 0.50,
+              "awaiting_approval_max": 0.30
+            }
+          }
+        },
+        {
+          "test_id": "TS011-T005",
+          "name": "Response Quality Check",
+          "priority": "MEDIUM",
+          "type": "manual_review",
+          "action": "Review 5 random production tickets for response quality",
+          "expected_results": [
+            "Bot responses are relevant to user questions",
+            "Bot provides actionable solutions",
+            "Bot tone is professional and helpful",
+            "No hallucinated information"
+          ],
+          "validation": {
+            "manual_review": true,
+            "sample_size": 5
+          }
+        }
+      ]
     }
   ],
   "execution_notes": {
