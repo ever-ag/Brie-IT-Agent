@@ -3,6 +3,7 @@ import boto3
 import os
 import time
 from datetime import datetime, timedelta
+from decimal import Decimal
 import random
 import urllib.request
 import urllib.parse
@@ -19,6 +20,12 @@ ses = boto3.client('ses')
 bedrock = boto3.client('bedrock-runtime')
 sfn_client = boto3.client('stepfunctions')
 interactions_table = dynamodb.Table('brie-it-helpdesk-bot-interactions')
+
+def to_float(value):
+    """Convert DynamoDB Decimal to float safely"""
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
 
 # Conversation tracking
 CONVERSATION_TIMEOUT_MINUTES = 30
@@ -40,6 +47,7 @@ def get_or_create_conversation(user_id, user_name, message_text):
             # Check most recent conversation
             recent = items[0]
             last_msg_time = recent.get('last_message_timestamp', recent.get('timestamp', 0))
+            last_msg_time = to_float(last_msg_time)
             time_since_last = datetime.utcnow().timestamp() - last_msg_time
             
             # If conversation is active (< 15 min since last message) and not closed
@@ -1349,18 +1357,21 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
         return False
 
 def log_interaction_to_dynamodb(user_id, user_name, user_message, bot_response):
-    """Log interaction to Recent Interactions table"""
-    try:
-        table = dynamodb.Table('recent-interactions')
-        table.put_item(Item={
-            'user_id': user_id,
-            'timestamp': int(time.time()),
-            'user_name': user_name,
-            'user_message': user_message,
-            'bot_response': bot_response
-        })
-    except Exception as e:
-        print(f"Error logging interaction: {e}")
+    """Log interaction to Recent Interactions table - DISABLED: table does not exist"""
+    # Legacy function - table 'recent-interactions' does not exist
+    # Interactions are tracked in 'brie-it-helpdesk-bot-interactions' instead
+    pass
+    # try:
+    #     table = dynamodb.Table('recent-interactions')
+    #     table.put_item(Item={
+    #         'user_id': user_id,
+    #         'timestamp': int(time.time()),
+    #         'user_name': user_name,
+    #         'user_message': user_message,
+    #         'bot_response': bot_response
+    #     })
+    # except Exception as e:
+    #     print(f"Error logging interaction: {e}")
 
 def save_ticket_to_dynamodb(user_id, user_name, user_email, interaction_id, timestamp):
     """Save ticket to DynamoDB and send email with conversation context"""
@@ -2509,6 +2520,7 @@ I've sent your request to the IT team for approval. You'll be notified once they
                 
                 # Check time since last message
                 last_msg_time = item.get('last_message_timestamp', timestamp)
+                last_msg_time = to_float(last_msg_time)
                 time_since_last = datetime.utcnow().timestamp() - last_msg_time
                 
                 # Only send prompt if enough time has passed since last message
@@ -2548,6 +2560,7 @@ I've sent your request to the IT team for approval. You'll be notified once they
                 if item.get('outcome') == 'In Progress' and not item.get('awaiting_approval'):
                     # Check time since last message
                     last_msg_time = item.get('last_message_timestamp', timestamp)
+                    last_msg_time = to_float(last_msg_time)
                     time_since_last = datetime.utcnow().timestamp() - last_msg_time
                     
                     # Only auto-close if 15 minutes have passed since last message
@@ -2572,7 +2585,8 @@ I've sent your request to the IT team for approval. You'll be notified once they
                         print(f"⏭️ Skipped auto-close for {interaction_id} - recent activity detected")
                 # Check for 7-day timeout on approval conversations
                 elif item.get('outcome') == 'Awaiting Approval' and item.get('awaiting_approval'):
-                    conversation_age_days = (datetime.utcnow().timestamp() - timestamp) / 86400
+                    timestamp_val = to_float(timestamp)
+                    conversation_age_days = (datetime.utcnow().timestamp() - timestamp_val) / 86400
                     if conversation_age_days >= 7:
                         # Escalate to ticket after 7 days
                         user_id = item.get('user_id')
