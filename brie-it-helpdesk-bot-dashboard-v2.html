@@ -462,7 +462,7 @@
             const displayItems = interactions.slice(startIndex, endIndex);
             
             tbody.innerHTML = displayItems.map(item => {
-                const date = new Date(item.date).toLocaleString();
+                const date = new Date(item.date).toLocaleString('en-US', { timeZone: 'America/Chicago' });
                 let badgeClass = 'badge-info';
                 if (item.outcome === 'Resolved by Brie') badgeClass = 'badge-success';
                 else if (item.outcome === 'Self-Service Solution') badgeClass = 'badge-info';
@@ -535,9 +535,9 @@
                             date = new Date();
                         }
                         
-                        // Validate and format
+                        // Validate and format with CST timezone
                         if (date && !isNaN(date.getTime())) {
-                            dateStr = date.toLocaleString();
+                            dateStr = date.toLocaleString('en-US', { timeZone: 'America/Chicago' });
                         } else {
                             console.warn('Invalid date for message:', msg);
                             dateStr = 'Invalid Date';
