@@ -1475,11 +1475,11 @@ Reply directly to this email to respond to the user.
         return False
 
 def analyze_image_with_claude(image_url, user_message):
-    """Analyze uploaded image using Claude Vision"""
+    """Analyze uploaded image using Claude Vision - copied from working Brie Agent"""
     try:
         print(f"Attempting to analyze image: {image_url}")
         
-        # Try to download the image from Slack
+        # Download the image from Slack
         headers = {'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
         req = urllib.request.Request(image_url, headers=headers)
         
@@ -1496,8 +1496,6 @@ def analyze_image_with_claude(image_url, user_message):
                     print("Downloaded image is empty")
                     return "The image appears to be empty. Please try uploading it again or describe what it shows."
                 
-                image_b64 = base64.b64encode(image_data).decode('utf-8')
-                
         except urllib.error.HTTPError as e:
             print(f"HTTP error downloading image: {e.code} - {e.reason}")
             return "I can see you uploaded an image, but I don't have permission to access it. Please describe what the image shows."
@@ -1505,21 +1503,33 @@ def analyze_image_with_claude(image_url, user_message):
             print(f"Error downloading image: {e}")
             return "I can see you uploaded an image, but I'm having trouble downloading it. Please describe what the image shows."
         
-        # Determine image type from URL or default to PNG
-        if '.jpg' in image_url or '.jpeg' in image_url:
-            media_type = "image/jpeg"
-        elif '.png' in image_url:
-            media_type = "image/png"
-        elif '.gif' in image_url:
-            media_type = "image/gif"
-        elif '.webp' in image_url:
-            media_type = "image/webp"
-        else:
-            media_type = "image/png"  # Default
+        # Detect image format from magic bytes
+        image_format = "image/png"  # default
+        if image_data[:4] == b'\xff\xd8\xff\xe0' or image_data[:4] == b'\xff\xd8\xff\xe1':
+            image_format = "image/jpeg"
+        elif image_data[:8] == b'\x89PNG\r\n\x1a\n':
+            image_format = "image/png"
+        elif image_data[:6] == b'GIF87a' or image_data[:6] == b'GIF89a':
+            image_format = "image/gif"
         
-        print(f"Using media type: {media_type}")
+        print(f"Detected image format: {image_format}, size: {len(image_data)} bytes")
         
-        # Prepare Claude Vision request
+        # Claude has a 5MB limit for images - if larger, we need to resize
+        MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
+        if len(image_data) > MAX_IMAGE_SIZE:
+            print(f"Image too large ({len(image_data)} bytes), needs resizing")
+            return "The image is too large to process. Please try uploading a smaller version or describe what it shows."
+        
+        # For very small images, also reject as they might be corrupted
+        if len(image_data) < 1000:
+            print(f"Image too small ({len(image_data)} bytes), might be corrupted")
+            return "The image appears to be too small or corrupted. Please try uploading it again."
+        
+        # Convert image to base64 for Claude
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        print(f"Base64 encoded, length: {len(image_base64)}")
+        
+        # Prepare the request for Claude Vision (exact format from working Brie Agent)
         request_body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 1000,
@@ -1528,27 +1538,38 @@ def analyze_image_with_claude(image_url, user_message):
                     "role": "user",
                     "content": [
                         {
-                            "type": "text",
-                            "text": f"User message: {user_message}\n\nPlease analyze this image and extract any relevant technical information. If it's a speed test, provide the download/upload speeds and ping. If it's an error message, describe the error. If it's a network configuration, summarize the key details."
-                        },
-                        {
                             "type": "image",
                             "source": {
                                 "type": "base64",
-                                "media_type": media_type,
-                                "data": image_b64
+                                "media_type": image_format,
+                                "data": image_base64
                             }
+                        },
+                        {
+                            "type": "text",
+                            "text": f"""User message: {user_message}
+
+Analyze this screenshot for IT support purposes. Extract:
+
+1. Any error messages (exact text)
+2. What application/system is shown
+3. What the user is trying to do
+4. Any visible UI problems or issues
+5. Context that would help IT support
+
+If it's a speed test, provide the download/upload speeds and ping.
+If it's an error message, describe the error.
+Focus on technical details that would help diagnose IT issues."""
                         }
                     ]
                 }
             ]
         }
         
-        print("Sending image to Claude for analysis...")
+        print(f"Sending image to Claude for analysis...")
         
-        # Call Claude Vision via Bedrock
         response = bedrock.invoke_model(
-            modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
+            modelId='us.anthropic.claude-sonnet-4-20250514-v1:0',
             body=json.dumps(request_body)
         )
         
@@ -1559,28 +1580,7 @@ def analyze_image_with_claude(image_url, user_message):
         return analysis
         
     except Exception as e:
-        print(f"Error analyzing image: {e}")
-        error_msg = str(e)
-        if "ValidationException" in error_msg:
-            return "I can see you uploaded an image, but I'm having trouble processing it. This might be due to the image format or size. Please describe what the image shows so I can help you."
-        elif "AccessDenied" in error_msg:
-            return "I can see you uploaded an image, but I don't have permission to analyze it. Please describe what the image shows."
-        else:
-            return "I can see you uploaded an image, but I'm having trouble analyzing it right now. Please describe what the image shows."
-        
-        # Call Claude Vision via Bedrock
-        response = bedrock.invoke_model(
-            modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
-            body=json.dumps(request_body)
-        )
-        
-        response_body = json.loads(response['body'].read())
-        analysis = response_body['content'][0]['text']
-        
-        return analysis
-        
-    except Exception as e:
-        print(f"Error analyzing image: {e}")
+        print(f"Error analyzing image with Claude Vision: {e}")
         return "I can see you uploaded an image, but I'm having trouble analyzing it right now. Please describe what the image shows."
 
 def get_claude_response(user_message, user_name, image_analysis=None):
@@ -1915,8 +1915,8 @@ def lambda_handler(event, context):
                             print(f"File details: {file}")
                             if file.get('mimetype', '').startswith('image/'):
                                 image_detected = True
-                                # Try thumbnail URLs first (more likely to be accessible), then private URLs
-                                for url_field in ['thumb_720', 'thumb_480', 'thumb_360', 'permalink_public', 'url_private_download', 'url_private']:
+                                # Try original images first (better quality for Claude Vision), then thumbnails
+                                for url_field in ['url_private', 'url_private_download', 'thumb_720', 'thumb_480', 'thumb_360']:
                                     if file.get(url_field):
                                         image_url = file[url_field]
                                         print(f"Found image URL via {url_field}: {image_url}")
@@ -1930,8 +1930,8 @@ def lambda_handler(event, context):
                         file_info = slack_event.get('file', {})
                         print(f"File share detected: {file_info}")
                         if file_info.get('mimetype', '').startswith('image/'):
-                            # Try thumbnail URLs first (more likely to be accessible), then private URLs
-                            for url_field in ['thumb_720', 'thumb_480', 'thumb_360', 'permalink_public', 'url_private_download', 'url_private']:
+                            # Try original images first (better quality for Claude Vision), then thumbnails
+                            for url_field in ['url_private', 'url_private_download', 'thumb_720', 'thumb_480', 'thumb_360']:
                                 if file_info.get(url_field):
                                     image_url = file_info[url_field]
                                     print(f"Found image URL via {url_field}: {image_url}")
