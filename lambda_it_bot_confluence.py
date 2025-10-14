@@ -362,34 +362,36 @@ def handle_resolution_button(action_id, user_id, channel):
 def handle_resumption_response(action_id, user_id, channel):
     """Handle conversation resumption button clicks"""
     try:
-        parts = action_id.split('_')
-        action_type = f"{parts[0]}_{parts[1]}"  # resume_yes or resume_no
-        prev_interaction_id = parts[2]
-        prev_timestamp = int(parts[3])
+        # Parse action_id: resumeyes_pending_USERID_TIMESTAMP or resumeno_pending_USERID_TIMESTAMP
+        parts = action_id.split('_', 1)  # Split into action and pending_id
+        action_type = parts[0]  # resumeyes or resumeno
+        pending_id = parts[1] if len(parts) > 1 else None
         
-        # Get pending message from it-actions table
-        table = dynamodb.Table('it-actions')
-        response = table.scan(
-            FilterExpression='action_type = :type AND details.user_id = :uid',
-            ExpressionAttributeValues={
-                ':type': 'pending_resumption',
-                ':uid': user_id
-            }
-        )
-        
-        items = response.get('Items', [])
-        if not items:
+        if not pending_id:
             send_slack_message(channel, "❌ Session expired. Please send your message again.")
             return
         
-        # Get most recent pending message
-        items.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-        pending = items[0]
+        # Get pending message from it-actions table
+        table = dynamodb.Table('it-actions')
+        try:
+            response = table.get_item(Key={'action_id': pending_id})
+            if 'Item' not in response:
+                send_slack_message(channel, "❌ Session expired. Please send your message again.")
+                return
+            
+            pending = response['Item']
+        except Exception as e:
+            print(f"Error getting pending message: {e}")
+            send_slack_message(channel, "❌ Session expired. Please send your message again.")
+            return
+        
         details = pending['details']
         user_message = details['message']
         user_name = details['user_name']
+        prev_interaction_id = details['prev_interaction_id']
+        prev_timestamp = details['prev_timestamp']
         
-        if action_type == 'resume_yes':
+        if action_type == 'resumeyes':
             # Resume previous conversation
             update_conversation(prev_interaction_id, prev_timestamp, "User resumed conversation", from_bot=False, outcome='In Progress')
             update_conversation(prev_interaction_id, prev_timestamp, user_message, from_bot=False)
@@ -412,7 +414,7 @@ def handle_resumption_response(action_id, user_id, channel):
                 })
             )
             
-        elif action_type == 'resume_no':
+        elif action_type == 'resumeno':
             # Create new conversation
             interaction_id = str(uuid.uuid4())
             timestamp = int(datetime.utcnow().timestamp())
@@ -458,10 +460,12 @@ def handle_resumption_response(action_id, user_id, channel):
             )
         
         # Delete pending message
-        table.delete_item(Key={'action_id': pending['action_id']})
+        table.delete_item(Key={'action_id': pending_id})
         
     except Exception as e:
         print(f"Error handling resumption response: {e}")
+        import traceback
+        print(traceback.format_exc())
         send_slack_message(channel, "❌ Error processing your response. Please send your message again.")
 
 def categorize_interaction(message_text):
@@ -2011,7 +2015,7 @@ def lambda_handler(event, context):
                             elif action_id.startswith(('resolved_', 'needhelp_', 'ticket_')):
                                 handle_resolution_button(action_id, user_id, channel)
                                 return {'statusCode': 200, 'body': 'OK'}
-                            elif action_id.startswith(('resume_yes_', 'resume_no_')):
+                            elif action_id.startswith(('resumeyes_', 'resumeno_')):
                                 handle_resumption_response(action_id, user_id, channel)
                                 return {'statusCode': 200, 'body': 'OK'}
                 
@@ -2085,7 +2089,25 @@ def lambda_handler(event, context):
                         if 'Item' in response:
                             prev_desc = response['Item'].get('description', 'your previous issue')
                             
-                            # Send resumption prompt with buttons
+                            # Store pending message FIRST before sending buttons
+                            table = dynamodb.Table('it-actions')
+                            pending_id = f"pending_{user_id}_{int(datetime.utcnow().timestamp())}"
+                            table.put_item(Item={
+                                'action_id': pending_id,
+                                'action_type': 'pending_resumption',
+                                'status': 'pending',
+                                'created_at': datetime.utcnow().isoformat(),
+                                'details': {
+                                    'user_id': user_id,
+                                    'user_name': user_name,
+                                    'message': message,
+                                    'channel': channel,
+                                    'prev_interaction_id': interaction_id,
+                                    'prev_timestamp': timestamp
+                                }
+                            })
+                            
+                            # Send resumption prompt with buttons using simple action_ids
                             resumption_msg = {
                                 "channel": channel,
                                 "text": f"I see you had a previous conversation about: {prev_desc}. Is this related?",
@@ -2104,35 +2126,18 @@ def lambda_handler(event, context):
                                                 "type": "button",
                                                 "text": {"type": "plain_text", "text": "✅ Yes, same issue"},
                                                 "style": "primary",
-                                                "action_id": f"resume_yes_{interaction_id}_{timestamp}_{user_id}"
+                                                "action_id": f"resumeyes_{pending_id}"
                                             },
                                             {
                                                 "type": "button",
                                                 "text": {"type": "plain_text", "text": "❌ No, different issue"},
-                                                "action_id": f"resume_no_{interaction_id}_{timestamp}_{user_id}"
+                                                "action_id": f"resumeno_{pending_id}"
                                             }
                                         ]
                                     }
                                 ]
                             }
                             send_slack_message_to_channel(resumption_msg)
-                            
-                            # Store pending message to process after user responds
-                            table = dynamodb.Table('it-actions')
-                            table.put_item(Item={
-                                'action_id': f"pending_msg_{user_id}_{int(datetime.utcnow().timestamp())}",
-                                'action_type': 'pending_resumption',
-                                'status': 'pending',
-                                'created_at': datetime.utcnow().isoformat(),
-                                'details': {
-                                    'user_id': user_id,
-                                    'user_name': user_name,
-                                    'message': message,
-                                    'channel': channel,
-                                    'prev_interaction_id': interaction_id,
-                                    'prev_timestamp': timestamp
-                                }
-                            })
                             return {'statusCode': 200, 'body': 'OK'}
                     
                     if not is_new:
