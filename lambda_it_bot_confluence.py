@@ -2,6 +2,7 @@ import json
 import boto3
 import os
 import time
+import requests
 from datetime import datetime, timedelta
 from decimal import Decimal
 import random
