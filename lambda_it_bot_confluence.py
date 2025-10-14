@@ -2023,7 +2023,7 @@ Need help with the form? Just ask!"""
                                         update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                                     
                                     # Send approval request
-                                    send_approval_request(user_id, real_name, user_email, selected_group, f"Add me to the {selected_group} dl")
+                                    send_approval_request(user_id, real_name, user_email, selected_group, f"Add me to the {selected_group} dl", conv_data)
                                     
                                     # Send approval confirmation message
                                     approval_msg = f"""📧 **Distribution List Request Received**
@@ -2358,8 +2358,11 @@ I've sent your request to the IT team for approval. You'll be notified once they
                         # Single match - use exact name
                         exact_dl = dl_matches[0]['name']
                         
+                        # Get conversation data
+                        conv_data = user_interaction_ids.get(user_id, {})
+                        
                         # Send approval request
-                        approval_id = send_approval_request(user_id, real_name, user_email, exact_dl, message)
+                        approval_id = send_approval_request(user_id, real_name, user_email, exact_dl, message, conv_data)
                         
                         response = f"""📧 **Distribution List Request Received**
 
