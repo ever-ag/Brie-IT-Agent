@@ -2,7 +2,6 @@ import json
 import boto3
 import os
 import time
-import requests
 from datetime import datetime, timedelta
 from decimal import Decimal
 import random
@@ -2544,12 +2543,19 @@ I've sent your request to the IT team for approval. You'll be notified once they
                 # Only send prompt if enough time has passed since last message
                 if time_since_last >= (expected_delay - 30):  # 30 second buffer
                     try:
-                        im_response = requests.post(
+                        # Open DM channel with user
+                        req_data = json.dumps({'users': user_id}).encode('utf-8')
+                        req = urllib.request.Request(
                             'https://slack.com/api/conversations.open',
-                            headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}', 'Content-Type': 'application/json'},
-                            json={'users': user_id}
+                            data=req_data,
+                            headers={
+                                'Authorization': f'Bearer {SLACK_BOT_TOKEN}',
+                                'Content-Type': 'application/json'
+                            }
                         )
-                        channel = im_response.json().get('channel', {}).get('id')
+                        with urllib.request.urlopen(req) as response:
+                            im_response = json.loads(response.read().decode('utf-8'))
+                            channel = im_response.get('channel', {}).get('id')
                         
                         if channel:
                             issue_desc = item.get('description', 'your issue')
@@ -2581,12 +2587,18 @@ I've sent your request to the IT team for approval. You'll be notified once they
                     # Only auto-close if 15 minutes have passed since last message
                     if time_since_last >= (15 * 60 - 30):  # 30 second buffer
                         try:
-                            im_response = requests.post(
+                            req_data = json.dumps({'users': user_id}).encode('utf-8')
+                            req = urllib.request.Request(
                                 'https://slack.com/api/conversations.open',
-                                headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}', 'Content-Type': 'application/json'},
-                                json={'users': user_id}
+                                data=req_data,
+                                headers={
+                                    'Authorization': f'Bearer {SLACK_BOT_TOKEN}',
+                                    'Content-Type': 'application/json'
+                                }
                             )
-                            channel = im_response.json().get('channel', {}).get('id')
+                            with urllib.request.urlopen(req) as response:
+                                im_response = json.loads(response.read().decode('utf-8'))
+                                channel = im_response.get('channel', {}).get('id')
                             
                             if channel:
                                 send_slack_message(channel, "⏱️ Your session has timed out. Conversation closed.")
@@ -2608,12 +2620,18 @@ I've sent your request to the IT team for approval. You'll be notified once they
                         
                         # Get user's DM channel
                         try:
-                            im_response = requests.post(
+                            req_data = json.dumps({'users': user_id}).encode('utf-8')
+                            req = urllib.request.Request(
                                 'https://slack.com/api/conversations.open',
-                                headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}', 'Content-Type': 'application/json'},
-                                json={'users': user_id}
+                                data=req_data,
+                                headers={
+                                    'Authorization': f'Bearer {SLACK_BOT_TOKEN}',
+                                    'Content-Type': 'application/json'
+                                }
                             )
-                            channel = im_response.json().get('channel', {}).get('id')
+                            with urllib.request.urlopen(req) as response:
+                                im_response = json.loads(response.read().decode('utf-8'))
+                                channel = im_response.get('channel', {}).get('id')
                             
                             if channel:
                                 send_slack_message(channel, "Your request has been waiting for approval for 7 days. A support ticket has been created for IT to follow up.")
