@@ -2137,7 +2137,7 @@ I've sent your request to the IT team for approval. You'll be notified once they
                     
                     # Check for bulk distribution list updates (add/remove multiple people)
                     if is_bulk_distribution_list_update(message):
-                        print(f\"Bulk distribution list update detected: {message}\")\
+                        print(f"Bulk distribution list update detected: {message}")
                         real_name, user_email = get_user_info_from_slack(user_id)
                         
                         msg = "📋 I see you need to make multiple changes to a distribution list. I'll create a ticket for the IT team to handle this request."
