@@ -58,7 +58,12 @@ def get_or_create_conversation(user_id, user_name, message_text):
             'description': redacted_message[:200],
             'outcome': 'In Progress',
             'date': datetime.utcnow().isoformat(),
-            'conversation_history': json.dumps([{'timestamp': timestamp, 'message': redacted_message, 'from': 'user'}]),
+            'conversation_history': json.dumps([{
+                'timestamp': timestamp, 
+                'timestamp_ms': timestamp * 1000,
+                'message': redacted_message, 
+                'from': 'user'
+            }]),
             'metadata': '{}'
         }
         
