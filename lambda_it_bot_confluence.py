@@ -2086,43 +2086,87 @@ def lambda_handler(event, context):
                     
                     # Handle conversation resumption prompt
                     if is_new == 'needs_resumption':
-                        # Get previous conversation details
-                        response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': timestamp})
-                        if 'Item' in response:
-                            prev_desc = response['Item'].get('description', 'your previous issue')
+                        # Check if there's already a pending resumption for this user
+                        table = dynamodb.Table('it-actions')
+                        check_response = table.scan(
+                            FilterExpression='action_type = :type AND begins_with(action_id, :prefix)',
+                            ExpressionAttributeValues={
+                                ':type': 'pending_resumption',
+                                ':prefix': f'pending_{user_id}_'
+                            }
+                        )
+                        
+                        # If already pending, create new conversation instead
+                        if check_response.get('Items'):
+                            print(f"⚠️ Resumption already pending for {user_id}, creating new conversation")
                             
-                            # Store pending message FIRST before sending buttons
-                            table = dynamodb.Table('it-actions')
-                            pending_id = f"pending_{user_id}_{int(datetime.utcnow().timestamp())}"
-                            table.put_item(Item={
-                                'action_id': pending_id,
-                                'action_type': 'pending_resumption',
-                                'status': 'pending',
-                                'created_at': datetime.utcnow().isoformat(),
-                                'details': {
-                                    'user_id': user_id,
-                                    'user_name': user_name,
-                                    'message': message,
-                                    'channel': channel,
-                                    'prev_interaction_id': interaction_id,
-                                    'prev_timestamp': timestamp
-                                }
-                            })
+                            # Create new conversation
+                            new_id = str(uuid.uuid4())
+                            new_ts = int(datetime.utcnow().timestamp())
+                            interaction_type = categorize_interaction(message)
+                            redacted_message = redact_sensitive_data(message)
                             
-                            # Send resumption prompt with buttons using simple action_ids
-                            resumption_msg = {
-                                "channel": channel,
-                                "text": f"I see you had a previous conversation about: {prev_desc}. Is this related?",
-                                "blocks": [
-                                    {
-                                        "type": "section",
-                                        "text": {
-                                            "type": "mrkdwn",
-                                            "text": f"👋 Welcome back! I see you had a previous conversation about:\n\n> {prev_desc}\n\nIs your new message related to this issue?"
-                                        }
-                                    },
-                                    {
-                                        "type": "actions",
+                            item = {
+                                'interaction_id': new_id,
+                                'timestamp': new_ts,
+                                'user_id': user_id,
+                                'user_name': user_name,
+                                'interaction_type': interaction_type,
+                                'description': redacted_message[:200],
+                                'outcome': 'In Progress',
+                                'date': datetime.utcnow().isoformat(),
+                                'last_message_timestamp': new_ts,
+                                'conversation_history': json.dumps([{
+                                    'timestamp': new_ts,
+                                    'timestamp_ms': new_ts * 1000,
+                                    'message': redacted_message,
+                                    'from': 'user'
+                                }]),
+                                'metadata': '{}'
+                            }
+                            interactions_table.put_item(Item=item)
+                            
+                            # Update variables for processing
+                            interaction_id = new_id
+                            timestamp = new_ts
+                            is_new = True
+                        else:
+                            # Get previous conversation details
+                            response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': timestamp})
+                            if 'Item' in response:
+                                prev_desc = response['Item'].get('description', 'your previous issue')
+                                
+                                # Store pending message FIRST before sending buttons
+                                pending_id = f"pending_{user_id}_{int(datetime.utcnow().timestamp())}"
+                                table.put_item(Item={
+                                    'action_id': pending_id,
+                                    'action_type': 'pending_resumption',
+                                    'status': 'pending',
+                                    'created_at': datetime.utcnow().isoformat(),
+                                    'details': {
+                                        'user_id': user_id,
+                                        'user_name': user_name,
+                                        'message': message,
+                                        'channel': channel,
+                                        'prev_interaction_id': interaction_id,
+                                        'prev_timestamp': timestamp
+                                    }
+                                })
+                                
+                                # Send resumption prompt with buttons using simple action_ids
+                                resumption_msg = {
+                                    "channel": channel,
+                                    "text": f"I see you had a previous conversation about: {prev_desc}. Is this related?",
+                                    "blocks": [
+                                        {
+                                            "type": "section",
+                                            "text": {
+                                                "type": "mrkdwn",
+                                                "text": f"👋 Welcome back! I see you had a previous conversation about:\n\n> {prev_desc}\n\nIs your new message related to this issue?"
+                                            }
+                                        },
+                                        {
+                                            "type": "actions",
                                         "elements": [
                                             {
                                                 "type": "button",
