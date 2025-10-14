@@ -716,10 +716,36 @@ def handle_approval_response(action_id, user_id):
             })
             
             # Update conversation outcome if tracked
-            if approval_data.get('interaction_id') and approval_data.get('interaction_timestamp'):
+            interaction_id = approval_data.get('interaction_id')
+            interaction_timestamp = approval_data.get('interaction_timestamp')
+            
+            # Fallback: lookup conversation from DynamoDB if not in approval_data
+            if not interaction_id or not interaction_timestamp:
+                try:
+                    timeout_timestamp = int((datetime.utcnow() - timedelta(minutes=30)).timestamp())
+                    response = interactions_table.scan(
+                        FilterExpression='user_id = :uid AND #ts > :timeout AND awaiting_approval = :true',
+                        ExpressionAttributeNames={'#ts': 'timestamp'},
+                        ExpressionAttributeValues={
+                            ':uid': approval_data['user_id'],
+                            ':timeout': timeout_timestamp,
+                            ':true': True
+                        }
+                    )
+                    items = response.get('Items', [])
+                    if items:
+                        items.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+                        conv = items[0]
+                        interaction_id = conv['interaction_id']
+                        interaction_timestamp = conv['timestamp']
+                        print(f"Found conversation via fallback lookup: {interaction_id}")
+                except Exception as e:
+                    print(f"Error in fallback lookup: {e}")
+            
+            if interaction_id and interaction_timestamp:
                 update_conversation(
-                    approval_data['interaction_id'],
-                    approval_data['interaction_timestamp'],
+                    interaction_id,
+                    interaction_timestamp,
                     f"DL request approved: {approval_data['distribution_list']}",
                     from_bot=True,
                     outcome='Resolved by Brie',
