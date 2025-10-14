@@ -54,8 +54,10 @@ def get_or_create_conversation(user_id, user_name, message_text):
             if time_since_last < (15 * 60) and recent.get('outcome') not in ['Ticket Created', 'Self-Service Solution', 'Resolved by Brie', 'Timed Out - No Response', 'Escalated to IT']:
                 return recent['interaction_id'], recent['timestamp'], False
             
-            # If conversation closed, always create new one
-            # TODO: Add resumption prompt asking if related to previous conversation
+            # If conversation closed recently (< 24 hours), offer to resume
+            if time_since_last < (24 * 60 * 60) and recent.get('outcome') in ['Timed Out - No Response', 'Self-Service Solution']:
+                # Return special flag to trigger resumption prompt
+                return recent['interaction_id'], recent['timestamp'], 'needs_resumption'
         
         # Create new conversation
         interaction_id = str(uuid.uuid4())
@@ -354,6 +356,111 @@ def handle_resolution_button(action_id, user_id, channel):
                 
     except Exception as e:
         print(f"Error handling resolution button: {e}")
+
+def handle_resumption_response(action_id, user_id, channel):
+    """Handle conversation resumption button clicks"""
+    try:
+        parts = action_id.split('_')
+        action_type = f"{parts[0]}_{parts[1]}"  # resume_yes or resume_no
+        prev_interaction_id = parts[2]
+        prev_timestamp = int(parts[3])
+        
+        # Get pending message from it-actions table
+        table = dynamodb.Table('it-actions')
+        response = table.scan(
+            FilterExpression='action_type = :type AND details.user_id = :uid',
+            ExpressionAttributeValues={
+                ':type': 'pending_resumption',
+                ':uid': user_id
+            }
+        )
+        
+        items = response.get('Items', [])
+        if not items:
+            send_slack_message(channel, "❌ Session expired. Please send your message again.")
+            return
+        
+        # Get most recent pending message
+        items.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        pending = items[0]
+        details = pending['details']
+        user_message = details['message']
+        user_name = details['user_name']
+        
+        if action_type == 'resume_yes':
+            # Resume previous conversation
+            update_conversation(prev_interaction_id, prev_timestamp, "User resumed conversation", from_bot=False, outcome='In Progress')
+            update_conversation(prev_interaction_id, prev_timestamp, user_message, from_bot=False)
+            
+            send_slack_message(channel, "✅ Continuing your previous conversation...")
+            
+            # Process the message with Claude
+            lambda_client = boto3.client('lambda')
+            lambda_client.invoke(
+                FunctionName=os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'it-helpdesk-bot'),
+                InvocationType='Event',
+                Payload=json.dumps({
+                    'async_processing': True,
+                    'user_message': user_message,
+                    'user_name': user_name,
+                    'user_id': user_id,
+                    'channel': channel,
+                    'interaction_id': prev_interaction_id,
+                    'timestamp': prev_timestamp
+                })
+            )
+            
+        elif action_type == 'resume_no':
+            # Create new conversation
+            interaction_id = str(uuid.uuid4())
+            timestamp = int(datetime.utcnow().timestamp())
+            interaction_type = categorize_interaction(user_message)
+            redacted_message = redact_sensitive_data(user_message)
+            
+            item = {
+                'interaction_id': interaction_id,
+                'timestamp': timestamp,
+                'user_id': user_id,
+                'user_name': user_name,
+                'interaction_type': interaction_type,
+                'description': redacted_message[:200],
+                'outcome': 'In Progress',
+                'date': datetime.utcnow().isoformat(),
+                'last_message_timestamp': timestamp,
+                'conversation_history': json.dumps([{
+                    'timestamp': timestamp,
+                    'timestamp_ms': timestamp * 1000,
+                    'message': redacted_message,
+                    'from': 'user'
+                }]),
+                'metadata': '{}'
+            }
+            interactions_table.put_item(Item=item)
+            
+            send_slack_message(channel, "✅ Starting a new conversation...")
+            
+            # Process the message with Claude
+            lambda_client = boto3.client('lambda')
+            lambda_client.invoke(
+                FunctionName=os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'it-helpdesk-bot'),
+                InvocationType='Event',
+                Payload=json.dumps({
+                    'async_processing': True,
+                    'user_message': user_message,
+                    'user_name': user_name,
+                    'user_id': user_id,
+                    'channel': channel,
+                    'interaction_id': interaction_id,
+                    'timestamp': timestamp
+                })
+            )
+        
+        # Delete pending message
+        table.delete_item(Key={'action_id': pending['action_id']})
+        
+    except Exception as e:
+        print(f"Error handling resumption response: {e}")
+        send_slack_message(channel, "❌ Error processing your response. Please send your message again.")
 
 def categorize_interaction(message_text):
     """Auto-categorize interaction type"""
@@ -1902,6 +2009,9 @@ def lambda_handler(event, context):
                             elif action_id.startswith(('resolved_', 'needhelp_', 'ticket_')):
                                 handle_resolution_button(action_id, user_id, channel)
                                 return {'statusCode': 200, 'body': 'OK'}
+                            elif action_id.startswith(('resume_yes_', 'resume_no_')):
+                                handle_resumption_response(action_id, user_id, channel)
+                                return {'statusCode': 200, 'body': 'OK'}
                 
                 return {'statusCode': 200, 'body': 'OK'}
             
@@ -1965,6 +2075,64 @@ def lambda_handler(event, context):
                     if headers.get('X-Slack-Retry-Num') or headers.get('x-slack-retry-num'):
                         print(f"⚠️ Ignoring Slack retry: {headers.get('X-Slack-Retry-Num') or headers.get('x-slack-retry-num')}")
                         return {'statusCode': 200, 'body': 'OK'}
+                    
+                    # Handle conversation resumption prompt
+                    if is_new == 'needs_resumption':
+                        # Get previous conversation details
+                        response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': timestamp})
+                        if 'Item' in response:
+                            prev_desc = response['Item'].get('description', 'your previous issue')
+                            
+                            # Send resumption prompt with buttons
+                            resumption_msg = {
+                                "channel": channel,
+                                "text": f"I see you had a previous conversation about: {prev_desc}. Is this related?",
+                                "blocks": [
+                                    {
+                                        "type": "section",
+                                        "text": {
+                                            "type": "mrkdwn",
+                                            "text": f"👋 Welcome back! I see you had a previous conversation about:\n\n> {prev_desc}\n\nIs your new message related to this issue?"
+                                        }
+                                    },
+                                    {
+                                        "type": "actions",
+                                        "elements": [
+                                            {
+                                                "type": "button",
+                                                "text": {"type": "plain_text", "text": "✅ Yes, same issue"},
+                                                "style": "primary",
+                                                "action_id": f"resume_yes_{interaction_id}_{timestamp}_{user_id}"
+                                            },
+                                            {
+                                                "type": "button",
+                                                "text": {"type": "plain_text", "text": "❌ No, different issue"},
+                                                "action_id": f"resume_no_{interaction_id}_{timestamp}_{user_id}"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                            send_slack_message_to_channel(resumption_msg)
+                            
+                            # Store pending message to process after user responds
+                            table = dynamodb.Table('it-actions')
+                            table.put_item(Item={
+                                'action_id': f"pending_msg_{user_id}_{int(datetime.utcnow().timestamp())}",
+                                'action_type': 'pending_resumption',
+                                'status': 'pending',
+                                'created_at': datetime.utcnow().isoformat(),
+                                'details': {
+                                    'user_id': user_id,
+                                    'user_name': user_name,
+                                    'message': message,
+                                    'channel': channel,
+                                    'prev_interaction_id': interaction_id,
+                                    'prev_timestamp': timestamp
+                                }
+                            })
+                            return {'statusCode': 200, 'body': 'OK'}
+                    
                     if not is_new:
                         # Update existing conversation
                         update_conversation(interaction_id, timestamp, message, from_bot=False)
