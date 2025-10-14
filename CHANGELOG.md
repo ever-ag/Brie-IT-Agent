@@ -7,6 +7,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Distribution list requests now automatically close with "Resolved by Brie" status after approval
+- Distribution list requests now correctly categorized as "Access Management" (was "General Support")
+- Interaction logging to recent-interactions DynamoDB table now working for all conversations
+- Confluence API 403 errors documented (token expired - requires manual refresh)
+- Recent Interactions dashboard now updates properly after code deployment fix
+
+### Added
+- Callback system in brie-infrastructure-connector to notify it-helpdesk-bot after DL approvals
+- DynamoDB logging function (log_interaction_to_dynamodb) for all user interactions
+- Confluence wiki image upload feature (commit ada70e4) - uploads relevant images from wiki pages
+
+### Changed
+- Categorization pattern changed from 'dl ' to ' dl' to match "employees dl" at end of message
+- Callback handler now sets outcome='Resolved by Brie' and awaiting_approval=False automatically
+
+## [2025-10-13]
+
+### Fixed
 - Removed false "cannot view images" messaging - bot now correctly processes images with Claude Vision without claiming it can't see them
 - Hardware detection now catches tickets like "Rachel Ranslow needs to be setup on an Ever.ag laptop" (previously missed)
 - Daily admin task detection now catches "Daily Admin Non-billable task" variations
