@@ -54,11 +54,8 @@ def get_or_create_conversation(user_id, user_name, message_text):
             if time_since_last < (15 * 60) and recent.get('outcome') not in ['Ticket Created', 'Self-Service Solution', 'Resolved by Brie', 'Timed Out - No Response', 'Escalated to IT']:
                 return recent['interaction_id'], recent['timestamp'], False
             
-            # If conversation closed recently (< 24 hours), ask about resumption
-            if time_since_last < (24 * 60 * 60) and recent.get('outcome') in ['Timed Out - No Response', 'Self-Service Solution']:
-                # Store resumption flag for later handling
-                recent['_needs_resumption_check'] = True
-                return recent['interaction_id'], recent['timestamp'], False
+            # If conversation closed, always create new one
+            # TODO: Add resumption prompt asking if related to previous conversation
         
         # Create new conversation
         interaction_id = str(uuid.uuid4())
