@@ -524,11 +524,24 @@
                         const ts = msg.timestamp < 4102444800 ? msg.timestamp * 1000 : msg.timestamp;
                         date = new Date(ts);
                     } else if (typeof msg.timestamp === 'string') {
-                        // ISO string - add 'Z' for UTC if not present
-                        const isoString = msg.timestamp.endsWith('Z') ? msg.timestamp : msg.timestamp + 'Z';
-                        date = new Date(isoString);
+                        // ISO string - try parsing with and without Z
+                        try {
+                            date = new Date(msg.timestamp);
+                            // Check if date is valid
+                            if (isNaN(date.getTime())) {
+                                // Try adding Z for UTC
+                                date = new Date(msg.timestamp + 'Z');
+                            }
+                        } catch (e) {
+                            date = new Date(); // Fallback to current time
+                        }
                     } else {
                         date = new Date(); // Fallback to current time
+                    }
+                    
+                    // Final validation
+                    if (isNaN(date.getTime())) {
+                        date = new Date(); // Fallback if still invalid
                     }
                     
                     return `
