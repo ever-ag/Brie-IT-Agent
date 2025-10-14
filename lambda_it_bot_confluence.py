@@ -316,7 +316,7 @@ SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', 'xoxb-your-token-here')
 
 # Confluence credentials
 CONFLUENCE_EMAIL = "mdenecke@dairy.com"
-CONFLUENCE_API_TOKEN = "ATLASSIAN_API_TOKEN"
+CONFLUENCE_API_TOKEN = os.environ.get('CONFLUENCE_API_TOKEN', 'ATLASSIAN_API_TOKEN')
 CONFLUENCE_BASE_URL = "https://everag.atlassian.net/wiki"
 
 # Simple in-memory conversation tracking with full history
