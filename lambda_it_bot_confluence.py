@@ -249,53 +249,73 @@ def send_resolution_prompt(channel, user_id, interaction_id, timestamp):
         print(f"Error sending resolution prompt: {e}")
 
 def schedule_auto_resolve(interaction_id, timestamp, user_id):
-    """Schedule engagement prompts and auto-resolve"""
+    """Schedule engagement prompts and auto-resolve using EventBridge Scheduler"""
     try:
-        lambda_client = boto3.client('lambda')
+        scheduler = boto3.client('scheduler')
+        lambda_arn = f"arn:aws:lambda:us-east-1:843046951786:function:it-helpdesk-bot"
+        role_arn = "arn:aws:iam::843046951786:role/EventBridgeSchedulerRole"
+        
+        current_time = datetime.utcnow()
         
         # Schedule first engagement prompt at 5 minutes
-        lambda_client.invoke(
-            FunctionName=os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'it-helpdesk-bot'),
-            InvocationType='Event',
-            Payload=json.dumps({
-                'engagement_prompt': True,
-                'interaction_id': interaction_id,
-                'timestamp': timestamp,
-                'user_id': user_id,
-                'delay_minutes': 5,
-                'prompt_number': 1
-            })
+        schedule_time_1 = current_time + timedelta(minutes=5)
+        scheduler.create_schedule(
+            Name=f"engagement-1-{interaction_id}-{timestamp}",
+            ScheduleExpression=f"at({schedule_time_1.strftime('%Y-%m-%dT%H:%M:%S')})",
+            Target={
+                'Arn': lambda_arn,
+                'RoleArn': role_arn,
+                'Input': json.dumps({
+                    'engagement_prompt': True,
+                    'interaction_id': interaction_id,
+                    'timestamp': timestamp,
+                    'user_id': user_id,
+                    'prompt_number': 1
+                })
+            },
+            FlexibleTimeWindow={'Mode': 'OFF'}
         )
         
         # Schedule second engagement prompt at 10 minutes
-        lambda_client.invoke(
-            FunctionName=os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'it-helpdesk-bot'),
-            InvocationType='Event',
-            Payload=json.dumps({
-                'engagement_prompt': True,
-                'interaction_id': interaction_id,
-                'timestamp': timestamp,
-                'user_id': user_id,
-                'delay_minutes': 10,
-                'prompt_number': 2
-            })
+        schedule_time_2 = current_time + timedelta(minutes=10)
+        scheduler.create_schedule(
+            Name=f"engagement-2-{interaction_id}-{timestamp}",
+            ScheduleExpression=f"at({schedule_time_2.strftime('%Y-%m-%dT%H:%M:%S')})",
+            Target={
+                'Arn': lambda_arn,
+                'RoleArn': role_arn,
+                'Input': json.dumps({
+                    'engagement_prompt': True,
+                    'interaction_id': interaction_id,
+                    'timestamp': timestamp,
+                    'user_id': user_id,
+                    'prompt_number': 2
+                })
+            },
+            FlexibleTimeWindow={'Mode': 'OFF'}
         )
         
         # Schedule auto-resolve at 15 minutes
-        lambda_client.invoke(
-            FunctionName=os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'it-helpdesk-bot'),
-            InvocationType='Event',
-            Payload=json.dumps({
-                'auto_resolve': True,
-                'interaction_id': interaction_id,
-                'timestamp': timestamp,
-                'user_id': user_id,
-                'delay_minutes': 15
-            })
+        schedule_time_3 = current_time + timedelta(minutes=15)
+        scheduler.create_schedule(
+            Name=f"auto-resolve-{interaction_id}-{timestamp}",
+            ScheduleExpression=f"at({schedule_time_3.strftime('%Y-%m-%dT%H:%M:%S')})",
+            Target={
+                'Arn': lambda_arn,
+                'RoleArn': role_arn,
+                'Input': json.dumps({
+                    'auto_resolve': True,
+                    'interaction_id': interaction_id,
+                    'timestamp': timestamp,
+                    'user_id': user_id
+                })
+            },
+            FlexibleTimeWindow={'Mode': 'OFF'}
         )
+        
         print(f"✅ Scheduled engagement prompts and auto-resolve for {interaction_id}")
     except Exception as e:
-        print(f"Error scheduling auto-resolve: {e}")
+        print(f"Error scheduling: {e}")
 
 def handle_resolution_button(action_id, user_id, channel):
     """Handle resolution button clicks"""
@@ -2498,9 +2518,6 @@ I've sent your request to the IT team for approval. You'll be notified once they
         
         # Handle engagement prompts
         elif event.get('engagement_prompt'):
-            delay_minutes = event.get('delay_minutes', 5)
-            time.sleep(delay_minutes * 60)
-            
             interaction_id = event['interaction_id']
             timestamp = event['timestamp']
             user_id = event.get('user_id')
@@ -2520,8 +2537,11 @@ I've sent your request to the IT team for approval. You'll be notified once they
                 last_msg_time = to_float(last_msg_time)
                 time_since_last = datetime.utcnow().timestamp() - last_msg_time
                 
+                # Calculate expected delay based on prompt number
+                expected_delay = prompt_number * 5 * 60  # 5 or 10 minutes
+                
                 # Only send prompt if enough time has passed since last message
-                if time_since_last >= (delay_minutes * 60 - 30):  # 30 second buffer
+                if time_since_last >= (expected_delay - 30):  # 30 second buffer
                     try:
                         im_response = requests.post(
                             'https://slack.com/api/conversations.open',
@@ -2542,9 +2562,6 @@ I've sent your request to the IT team for approval. You'll be notified once they
         
         # Handle auto-resolve after timeout
         elif event.get('auto_resolve'):
-            delay_minutes = event.get('delay_minutes', 15)
-            time.sleep(delay_minutes * 60)
-            
             interaction_id = event['interaction_id']
             timestamp = event['timestamp']
             user_id = event.get('user_id')
