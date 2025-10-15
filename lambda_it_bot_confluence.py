@@ -2053,6 +2053,10 @@ def lambda_handler(event, context):
                                         update_conversation(old_interaction_id, old_timestamp, new_message, from_bot=False, outcome='In Progress')
                                         user_interaction_ids[user_id] = {'interaction_id': old_interaction_id, 'timestamp': old_timestamp}
                                         
+                                        # Schedule engagement prompts
+                                        cancel_schedules(old_timestamp, old_interaction_id)
+                                        schedule_auto_resolve(old_interaction_id, old_timestamp, user_id)
+                                        
                                         # Process the message with Claude
                                         real_name, _ = get_user_info_from_slack(user_id)
                                         user_name = real_name if real_name else f"user_{user_id}"
@@ -2076,9 +2080,6 @@ def lambda_handler(event, context):
                                             InvocationType='Event',
                                             Payload=json.dumps(async_payload)
                                         )
-                                        
-                                        # Schedule engagement prompts for resumed conversation
-                                        schedule_auto_resolve(old_interaction_id, old_timestamp, user_id)
                                     else:
                                         # Start new conversation
                                         send_slack_message(channel, "✅ Starting a new conversation...")
@@ -2194,6 +2195,10 @@ def lambda_handler(event, context):
                             update_conversation(old_interaction_id, old_timestamp, new_message, from_bot=False, outcome='In Progress')
                             user_interaction_ids[user_id] = {'interaction_id': old_interaction_id, 'timestamp': old_timestamp}
                             
+                            # Schedule engagement prompts
+                            cancel_schedules(old_timestamp, old_interaction_id)
+                            schedule_auto_resolve(old_interaction_id, old_timestamp, user_id)
+                            
                             # Process the message with Claude
                             real_name, _ = get_user_info_from_slack(user_id)
                             user_name = real_name if real_name else f"user_{user_id}"
@@ -2217,9 +2222,6 @@ def lambda_handler(event, context):
                                 InvocationType='Event',
                                 Payload=json.dumps(async_payload)
                             )
-                            
-                            # Schedule engagement prompts for resumed conversation
-                            schedule_auto_resolve(old_interaction_id, old_timestamp, user_id)
                         else:
                             # Start new conversation
                             send_slack_message(channel, "✅ Starting a new conversation...")
