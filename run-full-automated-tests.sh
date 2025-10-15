@@ -418,6 +418,57 @@ else
 fi
 
 # ============================================================================
+# TS024: Slack Message Delivery After Approval (Issue #24)
+# ============================================================================
+echo -e "\n${YELLOW}=== TS024: Slack Message Delivery After Approval ===${NC}"
+
+log_test "TS024-T001: SSO approval completion sends Slack message"
+# Create SSO request
+PAYLOAD=$(cat <<EOF
+{
+  "event": {
+    "type": "message",
+    "user": "$TEST_USER_ID",
+    "text": "add me to the clickup sso",
+    "channel": "D09C5MFCV47",
+    "ts": "$(date +%s).000001"
+  }
+}
+EOF
+)
+
+RESPONSE=$(aws lambda invoke --profile $PROFILE --region $REGION \
+    --function-name $LAMBDA_FUNCTION \
+    --payload "$PAYLOAD" \
+    --cli-binary-format raw-in-base64-out \
+    /dev/stdout 2>/dev/null | head -1)
+
+sleep 3
+
+# Check brie-ad-group-manager logs for successful Slack API response
+LOGS=$(aws logs tail /aws/lambda/brie-ad-group-manager --profile $PROFILE --region $REGION --since 1m 2>/dev/null | grep "Slack API response" || echo "")
+
+if echo "$LOGS" | grep -q "'ok': True"; then
+    log_pass "Slack message delivered successfully"
+else
+    log_fail "Slack message not delivered"
+fi
+
+log_test "TS024-T002: Approval completion updates conversation history"
+# Check that conversation history was updated with approval message
+HISTORY=$(aws dynamodb scan --profile $PROFILE --region $REGION \
+    --table-name $INTERACTIONS_TABLE \
+    --filter-expression "user_id = :uid" \
+    --expression-attribute-values '{":uid":{"S":"'$TEST_USER_ID'"}}' \
+    --query 'Items[0].conversation_history.S' --output text 2>/dev/null || echo "[]")
+
+if echo "$HISTORY" | grep -q "Request Completed\|already a member"; then
+    log_pass "Conversation history updated with approval result"
+else
+    log_fail "Conversation history missing approval result"
+fi
+
+# ============================================================================
 # Summary
 # ============================================================================
 echo ""
