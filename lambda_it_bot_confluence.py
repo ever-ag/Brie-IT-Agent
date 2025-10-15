@@ -2076,6 +2076,9 @@ def lambda_handler(event, context):
                                             InvocationType='Event',
                                             Payload=json.dumps(async_payload)
                                         )
+                                        
+                                        # Schedule engagement prompts for resumed conversation
+                                        schedule_auto_resolve(old_interaction_id, old_timestamp, user_id)
                                     else:
                                         # Start new conversation
                                         send_slack_message(channel, "✅ Starting a new conversation...")
@@ -2214,6 +2217,9 @@ def lambda_handler(event, context):
                                 InvocationType='Event',
                                 Payload=json.dumps(async_payload)
                             )
+                            
+                            # Schedule engagement prompts for resumed conversation
+                            schedule_auto_resolve(old_interaction_id, old_timestamp, user_id)
                         else:
                             # Start new conversation
                             send_slack_message(channel, "✅ Starting a new conversation...")
