@@ -2947,6 +2947,50 @@ I've sent your request to the IT team for approval. You'll be notified once they
             
             return {'statusCode': 200, 'body': 'OK'}
         
+        # Handle approval timeout check (triggered daily by EventBridge)
+        elif event.get('check_approval_timeouts'):
+            print("🔍 Checking for timed-out approval requests...")
+            
+            # Scan for conversations awaiting approval older than 5 days
+            five_days_ago = int((datetime.utcnow() - timedelta(days=5)).timestamp())
+            
+            response = interactions_table.scan(
+                FilterExpression='awaiting_approval = :true AND #ts < :timeout',
+                ExpressionAttributeNames={'#ts': 'timestamp'},
+                ExpressionAttributeValues={':true': True, ':timeout': five_days_ago}
+            )
+            
+            timed_out_approvals = response.get('Items', [])
+            print(f"Found {len(timed_out_approvals)} timed-out approval requests")
+            
+            for item in timed_out_approvals:
+                interaction_id = item['interaction_id']
+                timestamp = item['timestamp']
+                user_id = item['user_id']
+                user_name = item.get('user_name', 'Unknown User')
+                description = item.get('description', 'approval request')
+                
+                # Get user email
+                real_name, user_email = get_user_info_from_slack(user_id)
+                
+                # Create ticket for timed-out approval
+                if save_ticket_to_dynamodb(user_id, user_name, user_email, interaction_id, timestamp):
+                    print(f"✅ Created ticket for timed-out approval: {interaction_id}")
+                    
+                    # Update conversation outcome
+                    update_conversation(interaction_id, timestamp, 
+                                      "Approval timed out after 5 days - ticket created", 
+                                      from_bot=True, outcome='Escalated to Ticket')
+                    
+                    # Notify user
+                    channel = f"@{user_id}"
+                    message = f"⏱️ Your approval request for *{description}* has been pending for 5 days. I've created a ticket and escalated it to IT Support. They'll follow up with you directly."
+                    send_slack_message(channel, message)
+                else:
+                    print(f"❌ Failed to create ticket for: {interaction_id}")
+            
+            return {'statusCode': 200, 'body': f'Processed {len(timed_out_approvals)} timed-out approvals'}
+        
         # Handle async processing
         elif event.get('async_processing'):
             user_message = event['user_message']
