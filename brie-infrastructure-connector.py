@@ -10,12 +10,52 @@ import urllib.parse
 import boto3
 import os
 import time
+from datetime import datetime
 
 # Configuration
 BESPIN_INSTANCE_ID = "i-0dca7766c8de43f08"  # Bespin domain controller
 DOMAIN_NAME = "everagglobal.com"
 SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
 IT_APPROVAL_CHANNEL = "C09KB40PL9J"
+
+# DynamoDB tables
+dynamodb = boto3.resource('dynamodb')
+actions_table = dynamodb.Table('it-actions')
+interactions_table = dynamodb.Table('brie-it-helpdesk-bot-interactions')
+
+def lookup_tracking(user_email):
+    """Look up tracking record for user"""
+    for attempt in range(3):
+        try:
+            response = actions_table.scan(
+                FilterExpression='action_type = :type AND user_email = :email',
+                ExpressionAttributeValues={':type': 'sso_interaction_tracking', ':email': user_email}
+            )
+            if response.get('Items'):
+                return response['Items'][0]
+            time.sleep(2)
+        except Exception as e:
+            print(f"Tracking lookup attempt {attempt + 1} failed: {e}")
+    return None
+
+def update_conversation(interaction_id, timestamp, message_text):
+    """Update conversation history"""
+    try:
+        response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': timestamp})
+        if 'Item' not in response:
+            return False
+        item = response['Item']
+        history = json.loads(item.get('conversation_history', '[]'))
+        history.append({'timestamp': datetime.utcnow().isoformat(), 'message': message_text[:500], 'from': 'bot'})
+        interactions_table.update_item(
+            Key={'interaction_id': interaction_id, 'timestamp': timestamp},
+            UpdateExpression='SET conversation_history = :hist, last_updated = :updated',
+            ExpressionAttributeValues={':hist': json.dumps(history), ':updated': datetime.utcnow().isoformat()}
+        )
+        return True
+    except Exception as e:
+        print(f"Error updating conversation: {e}")
+        return False
 
 def send_slack_message(channel, text):
     """Send message to Slack channel"""
@@ -897,9 +937,22 @@ Disconnect-ExchangeOnline -Confirm:$false
                     except Exception as e:
                         print(f"⚠️ Failed to send callback: {e}")
                 elif channel and not success:
+                    # Look up tracking record
+                    print(f"🔍 Looking up tracking for {user_email}")
+                    tracking = lookup_tracking(user_email)
+                    if tracking:
+                        print(f"✅ Found tracking: {tracking['interaction_id']}")
+                    else:
+                        print(f"❌ No tracking found for {user_email}")
+                    
                     # Send to user
                     user_msg = f"❌ **Request Failed**\n\nUnable to add you to **{group_name}**.\n\nError: {message}"
                     send_slack_message(channel, user_msg)
+                    
+                    # Update conversation history
+                    if tracking:
+                        print(f"📝 Updating conversation history")
+                        update_conversation(tracking['interaction_id'], tracking['interaction_timestamp'], user_msg)
                     
                     # Post to IT channel
                     it_msg = f"❌ **Request Failed**\n\nUser: {user_email}\nDistribution List: {group_name}\nError: {message}"

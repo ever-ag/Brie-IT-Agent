@@ -1887,9 +1887,13 @@ def lambda_handler(event, context):
                     items.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
                     conv = items[0]
                     
-                    # If already a member, mark as resolved
+                    # Update conversation based on status
                     if status == 'already_member':
                         update_conversation(conv['interaction_id'], conv['timestamp'], message, from_bot=True, outcome='Resolved by Brie')
+                    elif status == 'failed':
+                        update_conversation(conv['interaction_id'], conv['timestamp'], message, from_bot=True)
+                    elif status == 'completed':
+                        update_conversation(conv['interaction_id'], conv['timestamp'], message, from_bot=True)
             
             return {'statusCode': 200, 'body': 'OK'}
         
