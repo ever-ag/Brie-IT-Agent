@@ -249,6 +249,58 @@ All production validation tests passed:
 
 ---
 
+## TS012: Approval Timeout & Ticket Creation (NEW)
+**Status:** ✓ PASS  
+**Date Tested:** October 15, 2025, 11:33 AM CDT
+
+| Test ID | Test Name | Priority | Status | Notes |
+|---------|-----------|----------|--------|-------|
+| TS012-T001 | 5-Day Approval Timeout Detection | CRITICAL | ✓ PASS | Found 1 timed-out approval |
+| TS012-T002 | Automatic Ticket Creation | CRITICAL | ✓ PASS | Ticket created successfully |
+| TS012-T003 | Conversation Outcome Update | HIGH | ✓ PASS | Updated to "Escalated to Ticket" |
+| TS012-T004 | User Slack Notification | HIGH | ✓ PASS | Message sent successfully |
+| TS012-T005 | Email to IT Support | HIGH | ✓ PASS | Email sent via SES |
+| TS012-T006 | Conversation History Logging | MEDIUM | ✓ PASS | Timeout logged in history |
+
+**Test Procedure:**
+1. Created test approval request with timestamp 6 days old
+2. Manually triggered approval timeout check: `{"check_approval_timeouts": true}`
+3. Verified handler found and processed timed-out approval
+4. Verified ticket created in it-helpdesk-tickets table
+5. Verified conversation outcome updated to "Escalated to Ticket"
+6. Verified Slack notification sent to user
+7. Verified email sent to itsupport@ever.ag
+
+**Test Data:**
+```json
+{
+  "interaction_id": "test-approval-41fc6e32-2ec8-4c7f-b16b-ec0322b97349",
+  "timestamp": 1760027609,
+  "user_id": "UDR6PV7DX",
+  "description": "Test approval request - add to TestDL",
+  "awaiting_approval": true,
+  "age": "6 days"
+}
+```
+
+**Results:**
+- ✓ Handler found 1 timed-out approval (expected: 1)
+- ✓ Ticket created with conversation history
+- ✓ Conversation outcome: "Escalated to Ticket"
+- ✓ Conversation history updated: "Approval timed out after 5 days - ticket created"
+- ✓ Slack message: "⏱️ Your approval request for *Test approval request - add to TestDL* has been pending for 5 days..."
+- ✓ Email sent to itsupport@ever.ag with full context
+
+**EventBridge Schedule:**
+- Schedule Name: `approval-timeout-check-daily`
+- Schedule Expression: `rate(1 day)`
+- Target: it-helpdesk-bot Lambda
+- Status: Active
+
+**Fixes Issue:** #15 - Approval requests now properly escalated after 5 days
+
+---
+
 ## Known Issues (Not Blocking)
 
 ### ⚠️ Confluence API 403 (TS008)
