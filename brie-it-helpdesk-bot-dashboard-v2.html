@@ -538,7 +538,16 @@
                         
                         // Validate and format with CST timezone
                         if (date && !isNaN(date.getTime())) {
-                            dateStr = date.toLocaleString('en-US', { timeZone: 'America/Chicago' });
+                            dateStr = date.toLocaleString('en-US', { 
+                                timeZone: 'America/Chicago',
+                                month: '2-digit',
+                                day: '2-digit', 
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                                hour12: true
+                            });
                         } else {
                             console.warn('Invalid date for message:', msg);
                             dateStr = 'Invalid Date';

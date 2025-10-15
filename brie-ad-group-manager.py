@@ -16,10 +16,12 @@ IT_APPROVAL_CHANNEL = "C09KB40PL9J"
 def send_slack_message(channel, text):
     """Send message to Slack channel"""
     try:
+        print(f"🔍 Sending to channel: {channel}, token: {SLACK_BOT_TOKEN[:20]}...")
         url = 'https://slack.com/api/chat.postMessage'
         data = json.dumps({
             'channel': channel,
-            'text': text
+            'text': text,
+            'as_user': True
         }).encode('utf-8')
         
         headers = {
@@ -30,9 +32,12 @@ def send_slack_message(channel, text):
         req = urllib.request.Request(url, data=data, headers=headers)
         with urllib.request.urlopen(req) as response:
             result = json.loads(response.read().decode('utf-8'))
+            print(f"📤 Slack API response: {result}")
+            if not result.get('ok'):
+                print(f"❌ Slack API error: {result.get('error')}")
             return result.get('ok', False)
     except Exception as e:
-        print(f"Error sending Slack message: {e}")
+        print(f"❌ Error sending Slack message: {e}")
         return False
 
 def search_similar_groups(search_term):
@@ -92,7 +97,10 @@ def lambda_handler(event, context):
             params = event.get('params', {})
             sso_request = params.get('ssoGroupRequest', {})
             email_data = params.get('emailData', {})
-            approval_info = {}
+            approval_info = {
+                'interaction_id': params.get('interaction_id'),
+                'interaction_timestamp': params.get('interaction_timestamp')
+            }
             approval_id = event.get('approval_id', 'N/A')
         else:
             # Direct invocation format
@@ -229,6 +237,56 @@ try {{
         
         table.put_item(Item=log_entry)
         
+        # Update conversation in interactions table if we have the interaction_id
+        interaction_id = approval_info.get('interaction_id')
+        interaction_timestamp = approval_info.get('interaction_timestamp')
+        
+        # If not in approval_info, try to find it in tracking table
+        if not interaction_id:
+            try:
+                print(f"🔍 Looking up interaction tracking for {user_email}")
+                # Retry up to 3 times with delay for eventual consistency
+                for attempt in range(3):
+                    tracking_response = table.scan(
+                        FilterExpression='action_type = :type AND user_email = :email',
+                        ExpressionAttributeValues={
+                            ':type': 'sso_interaction_tracking',
+                            ':email': user_email
+                        }
+                    )
+                    if tracking_response.get('Items'):
+                        # Get the most recent tracking record
+                        items = tracking_response['Items']
+                        tracking = max(items, key=lambda x: int(x.get('timestamp', 0)))
+                        interaction_id = tracking.get('interaction_id')
+                        interaction_timestamp = tracking.get('interaction_timestamp')
+                        print(f"✅ Found interaction tracking: {interaction_id}")
+                        # Clean up tracking record
+                        table.delete_item(Key={'action_id': tracking['action_id']})
+                        break
+                    elif attempt < 2:
+                        print(f"⚠️ No tracking found, retrying... (attempt {attempt + 1})")
+                        time.sleep(2)
+                    else:
+                        print(f"⚠️ No tracking record found for {user_email} after 3 attempts")
+            except Exception as e:
+                print(f"⚠️ Failed to lookup interaction tracking: {e}")
+        
+        if interaction_id and interaction_timestamp:
+            try:
+                interactions_table = dynamodb.Table('brie-it-helpdesk-bot-interactions')
+                interactions_table.update_item(
+                    Key={'interaction_id': interaction_id, 'timestamp': interaction_timestamp},
+                    UpdateExpression='SET outcome = :outcome, awaiting_approval = :awaiting',
+                    ExpressionAttributeValues={
+                        ':outcome': 'Resolved - Approved' if success else 'Resolved - Failed',
+                        ':awaiting': False
+                    }
+                )
+                print(f"✅ Updated conversation {interaction_id} to {'Resolved - Approved' if success else 'Resolved - Failed'}")
+            except Exception as e:
+                print(f"⚠️ Failed to update conversation: {e}")
+        
         # Check if this came from Slack - use message_id as fallback
         slack_context = email_data.get('slackContext')
         if not slack_context:
@@ -254,6 +312,27 @@ try {{
                     user_message = f"✅ **Request Completed!**\n\nYou've been added to **{group_name}**.\n\nThe change has been applied to Active Directory."
                 
                 send_slack_message(channel, user_message)
+                
+                # Update conversation history
+                if interaction_id and interaction_timestamp:
+                    try:
+                        response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': interaction_timestamp})
+                        if 'Item' in response:
+                            item = response['Item']
+                            history = json.loads(item.get('conversation_history', '[]'))
+                            history.append({
+                                'timestamp': datetime.utcnow().isoformat(),
+                                'message': user_message,
+                                'from': 'bot'
+                            })
+                            interactions_table.update_item(
+                                Key={'interaction_id': interaction_id, 'timestamp': interaction_timestamp},
+                                UpdateExpression='SET conversation_history = :history',
+                                ExpressionAttributeValues={':history': json.dumps(history)}
+                            )
+                            print(f"✅ Updated conversation history with approval result")
+                    except Exception as e:
+                        print(f"⚠️ Failed to update conversation history: {e}")
                 
                 # Post to IT channel
                 status = "Already a member" if already_member else "Added"

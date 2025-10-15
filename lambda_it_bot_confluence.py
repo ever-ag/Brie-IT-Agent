@@ -474,7 +474,7 @@ SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', 'xoxb-your-token-here')
 
 # Confluence credentials
 CONFLUENCE_EMAIL = "mdenecke@dairy.com"
-CONFLUENCE_API_TOKEN = os.environ.get('CONFLUENCE_API_TOKEN', '')
+CONFLUENCE_API_TOKEN = os.environ.get('CONFLUENCE_API_TOKEN', 'your-confluence-token')
 CONFLUENCE_BASE_URL = "https://everag.atlassian.net/wiki"
 
 # Simple in-memory conversation tracking with full history
@@ -2522,7 +2522,7 @@ Need help with the form? Just ask!"""
                                     if conv_data.get('interaction_id'):
                                         mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
                                     
-                                    msg = f"✅ Your request for **{selected_group}** is being processed. IT will review and approve shortly."
+                                    msg = f"✅ Your request for **{selected_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                                     send_slack_message(channel, msg)
                                     
                                     # Log to conversation history
@@ -2572,6 +2572,22 @@ Need help with the form? Just ask!"""
                                     print(f"⚠️ Membership check failed, proceeding with approval")
                                 
                                 # Send approval request directly
+                                conv_data = user_interaction_ids.get(user_id, {})
+                                
+                                # Store interaction tracking for this approval
+                                if conv_data.get('interaction_id'):
+                                    actions_table = dynamodb.Table('it-actions')
+                                    tracking_id = f"sso_tracking_{user_id}_{int(datetime.now().timestamp())}"
+                                    actions_table.put_item(Item={
+                                        'action_id': tracking_id,
+                                        'action_type': 'sso_interaction_tracking',
+                                        'interaction_id': conv_data['interaction_id'],
+                                        'interaction_timestamp': conv_data['timestamp'],
+                                        'user_email': user_email,
+                                        'group_name': selected_group,
+                                        'timestamp': int(datetime.now().timestamp())
+                                    })
+                                
                                 approval_response = lambda_client.invoke(
                                     FunctionName='it-approval-system',
                                     InvocationType='Event',
@@ -2585,22 +2601,29 @@ Need help with the form? Just ask!"""
                                         "callback_function": "brie-ad-group-manager",
                                         "callback_params": {
                                             "ssoGroupRequest": sso_request,
-                                            "emailData": email_data
+                                            "emailData": email_data,
+                                            "interaction_id": conv_data.get('interaction_id'),
+                                            "interaction_timestamp": conv_data.get('timestamp')
                                         }
                                     })
                                 )
                                 
                                 # Mark conversation as awaiting approval
-                                conv_data = user_interaction_ids.get(user_id, {})
                                 if conv_data.get('interaction_id'):
+                                    print(f"🔵 SSO PATH: Marking conversation as awaiting approval")
                                     mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
                                 
-                                msg = f"✅ Your request for **{selected_group}** is being processed. IT will review and approve shortly."
+                                msg = f"✅ Your request for **{selected_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                                print(f"🔵 SSO PATH: Sending approval message to Slack")
                                 send_slack_message(channel, msg)
                                 
                                 # Log to conversation history
                                 if conv_data.get('interaction_id'):
+                                    print(f"📝 Adding approval message to conversation history: {conv_data['interaction_id']}")
                                     update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                    print(f"✅ Approval message added to conversation history")
+                                else:
+                                    print(f"⚠️ No interaction_id found in conv_data for SSO approval message")
                                 
                                 return {'statusCode': 200, 'body': 'OK'}
                             else:
@@ -2636,8 +2659,29 @@ Need help with the form? Just ask!"""
                             conv_data = user_interaction_ids.get(user_id, {})
                             if conv_data.get('interaction_id'):
                                 mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                
+                                # Store interaction tracking for SSO approvals
+                                if automation_type == 'SSO_GROUP':
+                                    print(f"📝 Creating SSO interaction tracking for {conv_data['interaction_id']}")
+                                    actions_table = dynamodb.Table('it-actions')
+                                    tracking_id = f"sso_tracking_{user_id}_{int(datetime.now().timestamp())}"
+                                    actions_table.put_item(Item={
+                                        'action_id': tracking_id,
+                                        'action_type': 'sso_interaction_tracking',
+                                        'interaction_id': conv_data['interaction_id'],
+                                        'interaction_timestamp': conv_data['timestamp'],
+                                        'user_email': user_email,
+                                        'group_name': '',
+                                        'timestamp': int(datetime.now().timestamp())
+                                    })
+                                    print(f"✅ Created tracking record: {tracking_id}")
                             
-                            send_slack_message(channel, f"✅ Your {automation_type.replace('_', ' ').lower()} request is being processed. IT will review and approve shortly.")
+                            msg = f"✅ Your {automation_type.replace('_', ' ').lower()} request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                            send_slack_message(channel, msg)
+                            
+                            # Log to conversation history
+                            if conv_data.get('interaction_id'):
+                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                         else:
                             send_slack_message(channel, "❌ Error processing your request. Please try again or contact IT directly.")
                         

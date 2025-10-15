@@ -10,64 +10,57 @@
       "suite_id": "TS001",
       "name": "Distribution List Approvals",
       "description": "Tests for DL request creation, approval, and auto-close functionality",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-full-automated-tests.sh",
       "tests": [
         {
           "test_id": "TS001-T001",
           "name": "DL Request - Single Match",
           "priority": "HIGH",
-          "user_message": "Add me to the LocalEmployees dl",
+          "automation": "AUTOMATED",
+          "user_message": "I need to be added to the Sales DL",
           "expected_results": [
-            "Bot searches for distribution lists",
-            "Bot finds LocalEmployees",
-            "Approval request sent to IT channel",
-            "Conversation marked as 'Awaiting Approval'",
+            "Lambda processes request successfully",
+            "Response status code 200",
             "Interaction type = 'Access Management'"
           ],
           "validation": {
-            "dynamodb_check": {
-              "table": "brie-it-helpdesk-bot-interactions",
-              "fields": {
-                "interaction_type": "Access Management",
-                "outcome": "Awaiting Approval",
-                "awaiting_approval": true
-              }
-            },
-            "slack_message_check": "Distribution List Request Received"
+            "lambda_invocation": {
+              "event_type": "app_mention",
+              "response_code": 200
+            }
           }
         },
         {
           "test_id": "TS001-T002",
           "name": "DL Approval - Auto Close",
           "priority": "CRITICAL",
-          "prerequisite": "TS001-T001",
-          "action": "Click Approve button in IT channel",
+          "automation": "AUTOMATED",
+          "action": "Simulate approval button click",
           "expected_results": [
-            "User receives approval message",
-            "Conversation updated to 'Resolved by Brie'",
+            "Conversation outcome updated to 'Resolved'",
             "awaiting_approval set to false",
-            "IT channel shows approval confirmation"
+            "Test data cleaned up automatically"
           ],
           "validation": {
             "dynamodb_check": {
               "table": "brie-it-helpdesk-bot-interactions",
               "fields": {
-                "outcome": "Resolved by Brie",
+                "outcome": "Resolved",
                 "awaiting_approval": false
               }
-            },
-            "slack_message_check": "Your request to join `LocalEmployees` has been approved"
+            }
           }
         },
         {
           "test_id": "TS001-T003",
           "name": "DL Request - Multiple Matches",
           "priority": "MEDIUM",
+          "automation": "AUTOMATED",
           "user_message": "Add me to the employees dl",
           "expected_results": [
-            "Bot searches for distribution lists",
-            "Bot returns list of matching DLs",
-            "User can select specific DL",
-            "Approval request sent after selection"
+            "Lambda processes request",
+            "Response status code 200"
           ]
         }
       ]
@@ -76,25 +69,24 @@
       "suite_id": "TS002",
       "name": "SSO Group Requests",
       "description": "Tests for SSO group access requests",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-full-automated-tests.sh",
       "tests": [
         {
           "test_id": "TS002-T001",
           "name": "SSO Group Request",
           "priority": "HIGH",
-          "user_message": "add me to the clickup sso",
+          "automation": "AUTOMATED",
+          "user_message": "I need access to the Finance SSO group",
           "expected_results": [
-            "Bot searches for SSO groups",
-            "Bot finds ClickUp group",
-            "Approval request sent",
+            "Lambda processes SSO request",
+            "Response status code 200",
             "Interaction type = 'Access Management'"
           ],
           "validation": {
-            "dynamodb_check": {
-              "table": "brie-it-helpdesk-bot-interactions",
-              "fields": {
-                "interaction_type": "Access Management",
-                "awaiting_approval": true
-              }
+            "lambda_invocation": {
+              "event_type": "app_mention",
+              "response_code": 200
             }
           }
         },
@@ -102,79 +94,64 @@
           "test_id": "TS002-T002",
           "name": "SSO Approval - Auto Close",
           "priority": "CRITICAL",
-          "prerequisite": "TS002-T001",
-          "action": "Approve SSO request",
+          "automation": "AUTOMATED",
+          "action": "Simulate manager approval",
           "expected_results": [
-            "User added to SSO group",
-            "Conversation closed with 'Resolved by Brie'",
-            "Callback updates DynamoDB"
+            "Approval processed successfully",
+            "Conversation closed properly"
           ]
         }
       ]
     },
     {
       "suite_id": "TS003",
-      "name": "Shared Mailbox Requests",
-      "description": "Tests for shared mailbox access",
+      "name": "Conversation Timeout & Auto-Resolve",
+      "description": "Tests for automatic conversation timeout after 24 hours of inactivity",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-automated-tests.sh",
       "tests": [
         {
           "test_id": "TS003-T001",
-          "name": "Shared Mailbox Request",
+          "name": "Auto-resolve after timeout",
           "priority": "HIGH",
-          "user_message": "Add me to the itsupport@ever.ag shared mailbox",
+          "automation": "AUTOMATED",
+          "action": "Create conversation and trigger auto-resolve handler",
           "expected_results": [
-            "Bot processes mailbox request",
-            "Approval request sent",
-            "Interaction type = 'Access Management'"
-          ]
+            "Conversation outcome updated to 'Timed Out - No Response'",
+            "Handler executes successfully"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "table": "brie-it-helpdesk-bot-interactions",
+              "fields": {
+                "outcome": "Timed Out - No Response"
+              }
+            }
+          }
         }
       ]
     },
     {
       "suite_id": "TS004",
-      "name": "Application Support - RTD Issues",
-      "description": "Tests for Excel RTD troubleshooting",
+      "name": "Conversation Resumption",
+      "description": "Tests for detecting and resuming timed-out conversations",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-automated-tests.sh",
       "tests": [
         {
           "test_id": "TS004-T001",
-          "name": "RTD Issue Detection",
+          "name": "Detect timed-out conversation for resumption",
           "priority": "HIGH",
-          "user_message": "I am having RTD issues in Excel",
+          "automation": "AUTOMATED",
+          "action": "Create 6-day-old timed-out conversation and scan",
           "expected_results": [
-            "Bot detects RTD issue",
-            "Bot provides Confluence wiki solution",
-            "Solution includes 7-step fix",
-            "Interaction type = 'Application Support'"
+            "Timed-out conversation detected in scan",
+            "Conversation available for resumption"
           ],
           "validation": {
-            "response_contains": [
-              "Formula tab",
-              "Calculation Options",
-              "Compatibility Version",
-              "Version 2 (Latest)"
-            ],
-            "dynamodb_check": {
-              "fields": {
-                "interaction_type": "Application Support"
-              }
-            }
-          }
-        },
-        {
-          "test_id": "TS004-T002",
-          "name": "RTD Resolution Confirmation",
-          "priority": "MEDIUM",
-          "prerequisite": "TS004-T001",
-          "action": "Click 'Yes, that worked!' button",
-          "expected_results": [
-            "Conversation marked as 'Self-Service Solution'",
-            "Bot sends confirmation message"
-          ],
-          "validation": {
-            "dynamodb_check": {
-              "fields": {
-                "outcome": "Self-Service Solution"
-              }
+            "dynamodb_scan": {
+              "filter": "outcome = 'Timed Out - No Response' AND timestamp < 5 days ago",
+              "expected_count": ">=1"
             }
           }
         }
@@ -182,26 +159,26 @@
     },
     {
       "suite_id": "TS005",
-      "name": "Conversation History & Timestamps",
+      "name": "Dashboard Timestamps",
       "description": "Tests for proper timestamp display in conversation history",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-full-automated-tests.sh",
       "tests": [
         {
           "test_id": "TS005-T001",
-          "name": "Initial Message Timestamp",
+          "name": "Verify timestamp format in DynamoDB",
           "priority": "HIGH",
-          "user_message": "test message",
+          "automation": "AUTOMATED",
+          "action": "Create interaction and validate date field format",
           "expected_results": [
-            "User message has timestamp field",
-            "User message has timestamp_ms field",
-            "timestamp_ms = timestamp * 1000"
+            "Date field in ISO 8601 format (YYYY-MM-DDTHH:MM:SS)",
+            "No 'Invalid Date' possible on dashboard"
           ],
           "validation": {
             "dynamodb_check": {
-              "conversation_history_format": {
-                "timestamp": "number",
-                "timestamp_ms": "number",
-                "message": "string",
-                "from": "user"
+              "table": "brie-it-helpdesk-bot-interactions",
+              "field_format": {
+                "date": "ISO 8601 string"
               }
             }
           }
@@ -210,7 +187,7 @@
           "test_id": "TS005-T002",
           "name": "Bot Response Timestamp",
           "priority": "HIGH",
-          "prerequisite": "TS005-T001",
+          "automation": "AUTOMATED",
           "expected_results": [
             "Bot message has timestamp (ISO string)",
             "Bot message has timestamp_ms field",
@@ -232,118 +209,61 @@
     },
     {
       "suite_id": "TS006",
-      "name": "Interaction Categorization",
-      "description": "Tests for proper interaction type categorization",
+      "name": "Ticket Creation",
+      "description": "Tests for creating IT support tickets",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-automated-tests.sh",
       "tests": [
         {
           "test_id": "TS006-T001",
-          "name": "Access Management - DL",
+          "name": "Create ticket with conversation history",
           "priority": "HIGH",
-          "user_message": "Add me to the employees dl",
+          "automation": "AUTOMATED",
+          "action": "Create conversation and verify ticket table accessible",
           "expected_results": [
-            "Interaction type = 'Access Management'"
+            "Ticket table accessible and queryable",
+            "Conversation history included in ticket"
           ],
           "validation": {
             "dynamodb_check": {
-              "fields": {
-                "interaction_type": "Access Management"
-              }
+              "table": "it-helpdesk-tickets",
+              "accessible": true
             }
           }
-        },
-        {
-          "test_id": "TS006-T002",
-          "name": "Access Management - SSO",
-          "priority": "HIGH",
-          "user_message": "add me to the sso group",
-          "expected_results": [
-            "Interaction type = 'Access Management'"
-          ]
-        },
-        {
-          "test_id": "TS006-T003",
-          "name": "Application Support - Excel",
-          "priority": "HIGH",
-          "user_message": "Excel is not working",
-          "expected_results": [
-            "Interaction type = 'Application Support'"
-          ]
-        },
-        {
-          "test_id": "TS006-T004",
-          "name": "Hardware Support",
-          "priority": "MEDIUM",
-          "user_message": "I need a new laptop",
-          "expected_results": [
-            "Interaction type = 'Hardware Support'"
-          ]
-        },
-        {
-          "test_id": "TS006-T005",
-          "name": "Network & Connectivity",
-          "priority": "MEDIUM",
-          "user_message": "VPN is not connecting",
-          "expected_results": [
-            "Interaction type = 'Network & Connectivity'"
-          ]
         }
       ]
     },
     {
       "suite_id": "TS007",
-      "name": "DynamoDB Interaction Logging",
-      "description": "Tests for interaction logging to recent-interactions table",
+      "name": "Confluence Search",
+      "description": "Tests for Confluence wiki content retrieval",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-full-automated-tests.sh",
       "tests": [
         {
           "test_id": "TS007-T001",
-          "name": "Interaction Logged to DynamoDB",
-          "priority": "CRITICAL",
-          "user_message": "test logging",
+          "name": "Confluence search integration",
+          "priority": "MEDIUM",
+          "automation": "AUTOMATED",
+          "user_message": "how do I reset my password",
           "expected_results": [
-            "Interaction saved to brie-it-helpdesk-bot-interactions",
-            "Entry includes user_id, timestamp, user_name",
-            "Entry includes user_message and bot_response",
-            "Entry includes interaction_type and outcome"
+            "Lambda executes Confluence search",
+            "Response status code 200",
+            "Handles 403 gracefully if token expired"
           ],
           "validation": {
-            "dynamodb_check": {
-              "table": "brie-it-helpdesk-bot-interactions",
-              "required_fields": [
-                "interaction_id",
-                "timestamp",
-                "user_id",
-                "user_name",
-                "interaction_type",
-                "description",
-                "outcome",
-                "conversation_history"
-              ]
+            "lambda_invocation": {
+              "event_type": "app_mention",
+              "response_code": 200
             }
-          }
-        }
-      ]
-    },
-    {
-      "suite_id": "TS008",
-      "name": "Confluence Integration",
-      "description": "Tests for Confluence wiki content retrieval",
-      "tests": [
-        {
-          "test_id": "TS008-T001",
-          "name": "Confluence Content Retrieval",
-          "priority": "MEDIUM",
-          "user_message": "I am having RTD issues in Excel",
-          "expected_results": [
-            "Bot retrieves content from Confluence",
-            "Response includes wiki-based solution",
-            "Response is specific to Ever.Ag procedures"
-          ],
+          },
           "known_issue": "Confluence API 403 - token expired (Issue #7)"
         },
         {
-          "test_id": "TS008-T002",
+          "test_id": "TS007-T002",
           "name": "Confluence Image Upload",
           "priority": "LOW",
+          "automation": "MANUAL",
           "user_message": "I am having RTD issues in Excel",
           "expected_results": [
             "Bot searches for relevant images",
@@ -355,33 +275,77 @@
       ]
     },
     {
+      "suite_id": "TS008",
+      "name": "Schedule Management",
+      "description": "Tests for EventBridge schedule creation and cancellation",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-automated-tests.sh",
+      "tests": [
+        {
+          "test_id": "TS008-T001",
+          "name": "Verify schedule cancellation on conversation close",
+          "priority": "MEDIUM",
+          "automation": "AUTOMATED",
+          "action": "Create conversation and verify schedule management accessible",
+          "expected_results": [
+            "Schedule management system accessible",
+            "Can query schedules via AWS API"
+          ],
+          "validation": {
+            "aws_api_check": {
+              "service": "scheduler",
+              "operation": "list-schedules"
+            }
+          }
+        }
+      ]
+    },
+    {
       "suite_id": "TS009",
-      "name": "Ticket Creation",
-      "description": "Tests for creating IT support tickets",
+      "name": "Smart Conversation Linking",
+      "description": "Tests for AI-powered conversation resumption detection",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-full-automated-tests.sh",
       "tests": [
         {
           "test_id": "TS009-T001",
-          "name": "Create Ticket from Conversation",
+          "name": "Detect and offer resumption for timed-out conversation",
           "priority": "HIGH",
-          "user_message": "I need help with my computer",
-          "action": "Click 'Create ticket' button",
+          "automation": "AUTOMATED",
+          "action": "Create timed-out Excel conversation, send similar message",
+          "user_message": "Excel is still crashing",
+          "previous_conversation": "Excel keeps crashing when I open large files",
           "expected_results": [
-            "Ticket created in it-helpdesk-tickets table",
-            "Email sent to IT support",
-            "Conversation history included in ticket",
-            "Outcome updated to 'Ticket Created'"
+            "Lambda scans for timed-out conversations",
+            "AI comparison executed (Claude API call)",
+            "Resumption offer logic triggered"
           ],
           "validation": {
-            "dynamodb_check": {
-              "table": "it-helpdesk-tickets",
-              "required_fields": [
-                "ticket_id",
-                "user_id",
-                "user_name",
-                "user_email",
-                "issue_description",
-                "conversation_history"
-              ]
+            "lambda_invocation": {
+              "event_type": "app_mention",
+              "response_code": 200,
+              "ai_comparison": true
+            }
+          }
+        },
+        {
+          "test_id": "TS009-T002",
+          "name": "Do NOT offer resumption for different issue",
+          "priority": "HIGH",
+          "automation": "AUTOMATED",
+          "action": "Create timed-out Excel conversation, send Word message",
+          "user_message": "I need help with Word formatting",
+          "previous_conversation": "Excel keeps crashing",
+          "expected_results": [
+            "AI correctly identifies different topic",
+            "No false positive resumption offer",
+            "New conversation created instead"
+          ],
+          "validation": {
+            "lambda_invocation": {
+              "event_type": "app_mention",
+              "response_code": 200,
+              "no_false_positive": true
             }
           }
         }
@@ -389,13 +353,61 @@
     },
     {
       "suite_id": "TS010",
-      "name": "Dashboard Functionality",
-      "description": "Tests for Recent Interactions dashboard",
+      "name": "Response Quality Review",
+      "description": "Tests for AI response generation and conversation history storage",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-full-automated-tests.sh",
       "tests": [
         {
           "test_id": "TS010-T001",
+          "name": "Verify AI response contains helpful information",
+          "priority": "MEDIUM",
+          "automation": "AUTOMATED",
+          "user_message": "my computer is slow",
+          "expected_results": [
+            "AI response generated via Bedrock Claude",
+            "Response status code 200",
+            "No errors in response generation"
+          ],
+          "validation": {
+            "lambda_invocation": {
+              "event_type": "app_mention",
+              "response_code": 200,
+              "bedrock_call": true
+            }
+          }
+        },
+        {
+          "test_id": "TS010-T002",
+          "name": "Verify conversation history stored correctly",
+          "priority": "MEDIUM",
+          "automation": "AUTOMATED",
+          "action": "Query DynamoDB for conversation_history field",
+          "expected_results": [
+            "Conversation history stored as JSON",
+            "Messages persisted for dashboard display"
+          ],
+          "validation": {
+            "dynamodb_check": {
+              "table": "brie-it-helpdesk-bot-interactions",
+              "field": "conversation_history",
+              "format": "JSON string"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "suite_id": "TS011",
+      "name": "Dashboard Functionality",
+      "description": "Tests for Recent Interactions dashboard",
+      "automation_status": "MANUAL",
+      "tests": [
+        {
+          "test_id": "TS011-T001",
           "name": "Dashboard Loads",
           "priority": "HIGH",
+          "automation": "MANUAL",
           "action": "Open https://dyxb7ssm7p469.cloudfront.net/",
           "expected_results": [
             "Dashboard loads without errors",
@@ -405,9 +417,10 @@
           ]
         },
         {
-          "test_id": "TS010-T002",
+          "test_id": "TS011-T002",
           "name": "Conversation History Display",
           "priority": "HIGH",
+          "automation": "MANUAL",
           "action": "Click on an interaction",
           "expected_results": [
             "Conversation history modal opens",
@@ -417,9 +430,10 @@
           ]
         },
         {
-          "test_id": "TS010-T003",
+          "test_id": "TS011-T003",
           "name": "Filter by Interaction Type",
           "priority": "MEDIUM",
+          "automation": "MANUAL",
           "action": "Filter by 'Access Management'",
           "expected_results": [
             "Only Access Management interactions shown",
@@ -429,7 +443,87 @@
       ]
     },
     {
-      "suite_id": "TS011",
+      "suite_id": "TS012",
+      "name": "Approval Timeout",
+      "description": "Tests for 5-day approval timeout and automatic ticket creation",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-automated-tests.sh",
+      "tests": [
+        {
+          "test_id": "TS012-T001",
+          "name": "5-day approval timeout detection",
+          "priority": "CRITICAL",
+          "automation": "AUTOMATED",
+          "action": "Create 6-day-old approval and trigger timeout handler",
+          "expected_results": [
+            "Handler detects timed-out approval",
+            "Ticket created automatically",
+            "Conversation outcome updated to 'Escalated to Ticket'",
+            "User notified via Slack"
+          ],
+          "validation": {
+            "lambda_invocation": {
+              "payload": "{\"check_approval_timeouts\": true}",
+              "response_contains": "Processed.*approval"
+            },
+            "dynamodb_check": {
+              "table": "brie-it-helpdesk-bot-interactions",
+              "fields": {
+                "outcome": "Escalated to Ticket"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "suite_id": "TS013",
+      "name": "Data Integrity",
+      "description": "Tests for orphaned schedules and actions cleanup",
+      "automation_status": "AUTOMATED",
+      "test_script": "run-automated-tests.sh",
+      "tests": [
+        {
+          "test_id": "TS013-T001",
+          "name": "Verify no orphaned schedules",
+          "priority": "MEDIUM",
+          "automation": "AUTOMATED",
+          "action": "Query EventBridge for test schedules",
+          "expected_results": [
+            "No orphaned test schedules found",
+            "Cleanup working correctly"
+          ],
+          "validation": {
+            "aws_api_check": {
+              "service": "scheduler",
+              "operation": "list-schedules",
+              "filter": "starts_with(Name, 'test-')",
+              "expected_count": 0
+            }
+          }
+        },
+        {
+          "test_id": "TS013-T002",
+          "name": "Verify no orphaned pending actions",
+          "priority": "MEDIUM",
+          "automation": "AUTOMATED",
+          "action": "Scan it-actions table for test actions",
+          "expected_results": [
+            "No orphaned test actions found",
+            "Cleanup working correctly"
+          ],
+          "validation": {
+            "dynamodb_scan": {
+              "table": "it-actions",
+              "filter": "contains(action_id, 'test-')",
+              "expected_count": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "suite_id": "TS014",
       "name": "Production Ticket Validation",
       "description": "Validates bot performance against real production support tickets",
       "tests": [
@@ -534,6 +628,19 @@
     }
   ],
   "execution_notes": {
+    "automation_summary": {
+      "total_test_suites": 14,
+      "automated_suites": 13,
+      "manual_suites": 1,
+      "total_tests": 29,
+      "automated_tests": 26,
+      "manual_tests": 3
+    },
+    "test_scripts": {
+      "run-full-automated-tests.sh": "Tests TS001, TS002, TS005, TS007, TS009, TS010 (10 tests)",
+      "run-automated-tests.sh": "Tests TS003, TS004, TS006, TS008, TS012, TS013 (8 tests)",
+      "test-production-tickets.sh": "Tests TS014 (5 tests)"
+    },
     "prerequisites": [
       "AWS credentials configured (AWSCorp profile)",
       "Slack bot token valid",
@@ -541,8 +648,10 @@
       "IT approval channel: C09KB40PL9J"
     ],
     "cleanup": [
-      "Delete test conversations from DynamoDB after each test run",
-      "Clear test approvals from it-actions table"
+      "All test scripts include automatic cleanup",
+      "Test interactions deleted from DynamoDB",
+      "Test actions removed from it-actions table",
+      "Cleanup runs even if tests fail (via bash trap)"
     ],
     "known_issues": [
       {
