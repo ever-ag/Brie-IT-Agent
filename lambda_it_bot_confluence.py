@@ -52,26 +52,6 @@ def get_or_create_conversation(user_id, user_name, message_text):
             if active.get('outcome') == 'In Progress' and not active.get('awaiting_approval'):
                 print(f"DEBUG: Returning active In Progress conversation")
                 return active['interaction_id'], active['timestamp'], False, None
-            
-            # If most recent conversation is closed, offer resumption
-            if active.get('outcome') in ['Timed Out - No Response', 'Self-Service Solution', 'Ticket Created', 'Resolved by Brie', 'Closed - Testing'] and not active.get('awaiting_approval'):
-                print(f"DEBUG: Most recent conversation is closed, checking for pending resumption")
-                # Check if there's already a pending resumption to avoid duplicates
-                try:
-                    actions_table = dynamodb.Table('it-actions')
-                    pending_check = actions_table.scan(
-                        FilterExpression='user_id = :uid AND action_type = :at',
-                        ExpressionAttributeValues={':uid': user_id, ':at': 'pending_resumption'}
-                    )
-                    print(f"DEBUG: Pending resumption check - found {len(pending_check.get('Items', []))} items")
-                    if not pending_check.get('Items'):
-                        # Return with resumption info
-                        print(f"✅ Offering resumption for closed conversation: {active.get('interaction_id')}")
-                        return None, None, True, active
-                    else:
-                        print(f"DEBUG: Pending resumption already exists, skipping")
-                except Exception as e:
-                    print(f"Error checking pending resumption: {e}")
         
         # Check for recent timeouts (past 24 hours) with similar topics
         recent_timeout_timestamp = int((datetime.utcnow() - timedelta(hours=24)).timestamp())
@@ -91,6 +71,19 @@ def get_or_create_conversation(user_id, user_name, message_text):
             for recent in recent_items:
                 # Skip if awaiting approval
                 if recent.get('awaiting_approval'):
+                    continue
+                # Check if there's already a pending resumption to avoid duplicates
+                try:
+                    actions_table = dynamodb.Table('it-actions')
+                    pending_check = actions_table.scan(
+                        FilterExpression='user_id = :uid AND action_type = :at',
+                        ExpressionAttributeValues={':uid': user_id, ':at': 'pending_resumption'}
+                    )
+                    if pending_check.get('Items'):
+                        print(f"DEBUG: Pending resumption already exists, skipping")
+                        continue
+                except Exception as e:
+                    print(f"Error checking pending resumption: {e}")
                     continue
                 # Compare topics using AI
                 if compare_topics(message_text, recent.get('description', '')):
@@ -128,12 +121,19 @@ def get_or_create_conversation(user_id, user_name, message_text):
 def compare_topics(new_message, previous_description):
     """Use AI to determine if new message is related to previous conversation"""
     try:
-        prompt = f"""Compare these two IT support issues and determine if they are about the same topic.
+        prompt = f"""Compare these two IT support issues and determine if they are about the EXACT SAME specific problem.
 
 Previous issue: {previous_description}
 New message: {new_message}
 
-Are these about the same IT issue? Answer only YES or NO."""
+Are these about the EXACT SAME specific IT issue? They must be about the same application/system AND the same problem.
+For example:
+- "Excel is slow" and "Word is slow" are DIFFERENT (different applications)
+- "Printer not working" and "Printer paper jam" are DIFFERENT (different problems)
+- "Excel is slow" and "Excel still slow" are SAME
+- "Printer not working" and "My printer won't print" are SAME
+
+Answer only YES or NO."""
 
         request_body = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -2283,6 +2283,9 @@ def lambda_handler(event, context):
                     user_name = real_name if real_name else f"user_{user_id}"
                     message = slack_event.get('text', '')
                     channel = slack_event.get('channel')
+                    
+                    # Send immediate acknowledgment
+                    send_slack_message(channel, "🔍 Checking your request...")
                     
                     # Track conversation
                     interaction_id, timestamp, is_new, resumption_conv = get_or_create_conversation(user_id, user_name, message)
