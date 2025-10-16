@@ -1220,6 +1220,35 @@ def send_slack_message(channel, text, blocks=None):
         print(f"Error sending Slack message: {e}")
         return False
 
+def send_error_recovery_message(channel, error_msg, interaction_id, timestamp, user_id):
+    """Send error message with recovery buttons"""
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"{error_msg}\n\nWhat would you like to do?"
+            }
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🎫 Create Ticket", "emoji": True},
+                    "action_id": f"error_ticket_{interaction_id}_{timestamp}",
+                    "style": "primary"
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🔄 Start Over", "emoji": True},
+                    "action_id": f"error_retry_{interaction_id}_{timestamp}"
+                }
+            ]
+        }
+    ]
+    send_slack_message(channel, "", blocks=blocks)
+
 def get_user_info_from_slack(user_id):
     """Get user name and email from Slack profile"""
     try:
@@ -1363,11 +1392,13 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             
             if not matches:
                 msg = f"❌ No groups found matching '{group_search}'"
-                send_slack_message(channel, msg)
                 # Log to conversation history
                 conv_data = user_interaction_ids.get(user_id, {})
                 if conv_data.get('interaction_id'):
                     update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                    send_error_recovery_message(channel, msg, conv_data['interaction_id'], conv_data['timestamp'], user_id)
+                else:
+                    send_slack_message(channel, msg)
                 return False
             
             if len(matches) > 1:
@@ -2025,6 +2056,26 @@ def lambda_handler(event, context):
                                     update_conversation(interaction_id, timestamp, "User confirmed issue resolved", from_bot=False, outcome='Self-Service Solution')
                                 
                                 return {'statusCode': 200, 'body': 'OK'}
+                            elif action_id.startswith(('error_ticket_', 'error_retry_')):
+                                # Handle error recovery buttons
+                                parts = action_id.split('_')
+                                action_type = parts[1]  # ticket or retry
+                                interaction_id = parts[2]
+                                timestamp = int(parts[3])
+                                
+                                if action_type == 'ticket':
+                                    # Create ticket and close conversation
+                                    send_slack_message(channel, "🎫 Creating a ticket for IT support...")
+                                    cancel_schedules(timestamp, interaction_id)
+                                    update_conversation(interaction_id, timestamp, "User requested ticket after error", from_bot=False, outcome='Ticket Created')
+                                    handle_resolution_button(f"ticket_{interaction_id}_{timestamp}", user_id, channel)
+                                elif action_type == 'retry':
+                                    # Close conversation and allow fresh start
+                                    send_slack_message(channel, "🔄 Okay, let's start fresh. What can I help you with?")
+                                    cancel_schedules(timestamp, interaction_id)
+                                    update_conversation(interaction_id, timestamp, "User chose to start over after error", from_bot=False, outcome='Cancelled - User Retry')
+                                
+                                return {'statusCode': 200, 'body': 'OK'}
                             elif action_id.startswith(('resumeyes_', 'resumeno_')):
                                 # Handle resumption response
                                 parts = action_id.split('_')
@@ -2163,6 +2214,27 @@ def lambda_handler(event, context):
                 
                 if action_id.startswith(('approve_', 'deny_')):
                     handle_approval_response(action_id, user_id)
+                    return {'statusCode': 200, 'body': 'OK'}
+                
+                if action_id.startswith(('error_ticket_', 'error_retry_')):
+                    # Handle error recovery buttons
+                    parts = action_id.split('_')
+                    action_type = parts[1]  # ticket or retry
+                    interaction_id = parts[2]
+                    timestamp = int(parts[3])
+                    
+                    if action_type == 'ticket':
+                        # Create ticket and close conversation
+                        send_slack_message(channel, "🎫 Creating a ticket for IT support...")
+                        cancel_schedules(timestamp, interaction_id)
+                        update_conversation(interaction_id, timestamp, "User requested ticket after error", from_bot=False, outcome='Ticket Created')
+                        handle_resolution_button(f"ticket_{interaction_id}_{timestamp}", user_id, channel)
+                    elif action_type == 'retry':
+                        # Close conversation and allow fresh start
+                        send_slack_message(channel, "🔄 Okay, let's start fresh. What can I help you with?")
+                        cancel_schedules(timestamp, interaction_id)
+                        update_conversation(interaction_id, timestamp, "User chose to start over after error", from_bot=False, outcome='Cancelled - User Retry')
+                    
                     return {'statusCode': 200, 'body': 'OK'}
                 
                 if action_id.startswith(('resumeyes_', 'resumeno_')):
@@ -2695,7 +2767,12 @@ Need help with the form? Just ask!"""
                             if conv_data.get('interaction_id'):
                                 update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                         else:
-                            send_slack_message(channel, "❌ Error processing your request. Please try again or contact IT directly.")
+                            msg = "❌ Error processing your request. Please try again or contact IT directly."
+                            if conv_data.get('interaction_id'):
+                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                send_error_recovery_message(channel, msg, conv_data['interaction_id'], conv_data['timestamp'], user_id)
+                            else:
+                                send_slack_message(channel, msg)
                         
                         return {'statusCode': 200, 'body': 'OK'}
                     
