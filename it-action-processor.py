@@ -1732,10 +1732,11 @@ def extract_sso_group_request(subject, body, sender):
     
     # Extract group name - look for patterns with "SSO"
     group_patterns = [
-        r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?([A-Za-z0-9\s\-_]+\s+sso)',
-        r'([A-Za-z0-9\s\-_]+\s+sso)\s+(?:group|access|provisioning|setup|login|authentication)',
-        r'(?:requesting|need|enable|grant|provision)\s+([A-Za-z0-9\s\-_]+\s+sso)',
-        r'([A-Za-z0-9\s\-_]+)\s+sso\s+(?:isn\'t|not|issues|waiting)'
+        r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?sso\s+([A-Za-z0-9\s\-_.]+?)(?:\s+group|\s*$)',
+        r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?([A-Za-z0-9\s\-_.]+\s+sso\s+[A-Za-z0-9\s\-_.]+?)(?:\s+group|\s*$)',
+        r'([A-Za-z0-9\s\-_.]+\s+sso\s+[A-Za-z0-9\s\-_.]+?)\s+(?:group|access|provisioning|setup|login|authentication)',
+        r'(?:requesting|need|enable|grant|provision)\s+([A-Za-z0-9\s\-_.]+\s+sso)',
+        r'([A-Za-z0-9\s\-_.]+)\s+sso\s+(?:isn\'t|not|issues|waiting)'
     ]
     
     group_name = None
