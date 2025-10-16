@@ -1403,8 +1403,9 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             
             if len(matches) > 1:
                 # Multiple matches - ask user to select
-                group_list = "\n".join([f"• {g['name']}" for g in matches])
-                msg = f"🔍 Found multiple groups matching '{group_search}':\n\n{group_list}\n\nPlease reply with the exact group name you want."
+                # Use backticks to prevent Slack from linkifying group names
+                group_list = "\n".join([f"• `{g['name']}`" for g in matches])
+                msg = f"🔍 Found multiple groups matching '{group_search}':\n\n{group_list}\n\nPlease reply with the exact group name you want (copy without the backticks)."
                 send_slack_message(channel, msg)
                 
                 # Log to conversation history
