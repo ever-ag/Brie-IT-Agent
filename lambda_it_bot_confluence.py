@@ -1435,6 +1435,8 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             elif membership_status == "GROUP_NOT_FOUND":
                 send_slack_message(channel, f"❌ Group **{exact_group}** not found in Active Directory.")
                 return False
+            elif membership_status == "ERROR":
+                print(f"⚠️ Membership check returned ERROR, proceeding with approval request anyway")
             
             # Update request with exact group name
             request_details['group_name'] = exact_group
@@ -1885,8 +1887,13 @@ def lambda_handler(event, context):
             message = result_data.get('message', '')
             status = result_data.get('status', '')
             user_id = slack_context.get('user_id')
+            channel = slack_context.get('channel')
             
             if user_id and message:
+                # Send message to user
+                if channel:
+                    send_slack_message(channel, message)
+                
                 # Find active conversation
                 timeout_timestamp = int((datetime.utcnow() - timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES)).timestamp())
                 response = interactions_table.scan(

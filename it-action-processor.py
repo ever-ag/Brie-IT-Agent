@@ -2207,34 +2207,44 @@ def handle_approval_callback(event, context):
                 import urllib.request
                 import json as json_lib
                 
-                slack_payload = {
-                    'channel': channel,
-                    'text': user_msg
-                }
-                req = urllib.request.Request(
-                    'https://slack.com/api/chat.postMessage',
-                    data=json_lib.dumps(slack_payload).encode('utf-8'),
-                    headers={
-                        'Content-Type': 'application/json',
-                        'Authorization': f'Bearer {os.environ.get("SLACK_BOT_TOKEN", "")}'
+                try:
+                    print(f"📤 Sending to user channel: {channel}")
+                    slack_payload = {
+                        'channel': channel,
+                        'text': user_msg
                     }
-                )
-                urllib.request.urlopen(req)
+                    req = urllib.request.Request(
+                        'https://slack.com/api/chat.postMessage',
+                        data=json_lib.dumps(slack_payload).encode('utf-8'),
+                        headers={
+                            'Content-Type': 'application/json',
+                            'Authorization': f'Bearer {os.environ.get("SLACK_BOT_TOKEN", "")}'
+                        }
+                    )
+                    response = urllib.request.urlopen(req)
+                    print(f"✅ Sent to user: {response.read().decode()}")
+                except Exception as e:
+                    print(f"❌ Failed to send to user: {e}")
                 
-                # Send to IT channel
-                it_payload = {
-                    'channel': 'C09KB40PL9J',  # IT channel
-                    'text': it_msg
-                }
-                req = urllib.request.Request(
-                    'https://slack.com/api/chat.postMessage',
-                    data=json_lib.dumps(it_payload).encode('utf-8'),
-                    headers={
-                        'Content-Type': 'application/json',
-                        'Authorization': f'Bearer {os.environ.get("SLACK_BOT_TOKEN", "")}'
+                try:
+                    print(f"📤 Sending to IT channel: C09KB40PL9J")
+                    # Send to IT channel
+                    it_payload = {
+                        'channel': 'C09KB40PL9J',  # IT channel
+                        'text': it_msg
                     }
-                )
-                urllib.request.urlopen(req)
+                    req = urllib.request.Request(
+                        'https://slack.com/api/chat.postMessage',
+                        data=json_lib.dumps(it_payload).encode('utf-8'),
+                        headers={
+                            'Content-Type': 'application/json',
+                            'Authorization': f'Bearer {os.environ.get("SLACK_BOT_TOKEN", "")}'
+                        }
+                    )
+                    response = urllib.request.urlopen(req)
+                    print(f"✅ Sent to IT: {response.read().decode()}")
+                except Exception as e:
+                    print(f"❌ Failed to send to IT: {e}")
                 
                 # Send callback to it-helpdesk-bot to update conversation history
                 if slack_context and slack_context.get('user_id'):
