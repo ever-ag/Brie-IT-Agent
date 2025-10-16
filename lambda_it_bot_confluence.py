@@ -3,6 +3,7 @@ import boto3
 import os
 import time
 from datetime import datetime, timedelta
+from decimal import Decimal
 import random
 import urllib.request
 import urllib.parse
@@ -18,6 +19,12 @@ dynamodb = boto3.resource('dynamodb')
 ses = boto3.client('ses')
 bedrock = boto3.client('bedrock-runtime')
 sfn_client = boto3.client('stepfunctions')
+
+# Helper to convert Decimal to int/float for JSON serialization
+def decimal_to_number(obj):
+    if isinstance(obj, Decimal):
+        return int(obj) if obj % 1 == 0 else float(obj)
+    return obj
 interactions_table = dynamodb.Table('brie-it-helpdesk-bot-interactions')
 
 # Conversation tracking
@@ -36,32 +43,55 @@ def get_or_create_conversation(user_id, user_name, message_text):
         )
         
         items = response.get('Items', [])
+        print(f"DEBUG: Found {len(items)} conversations within timeout window")
         if items:
             items.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
             active = items[0]
-            if active.get('outcome') not in ['Ticket Created', 'Self-Service Solution', 'Resolved by Brie']:
-                return active['interaction_id'], active['timestamp'], False
+            print(f"DEBUG: Most recent conversation - ID: {active.get('interaction_id')}, Outcome: {active.get('outcome')}, Timestamp: {active.get('timestamp')}")
+            # Check if conversation is still active (outcome is "In Progress")
+            if active.get('outcome') == 'In Progress' and not active.get('awaiting_approval'):
+                print(f"DEBUG: Returning active In Progress conversation")
+                return active['interaction_id'], active['timestamp'], False, None
         
-        # Check for timed-out conversations within 24 hours to resume
-        day_ago = int((datetime.utcnow() - timedelta(hours=24)).timestamp())
-        response = interactions_table.scan(
-            FilterExpression='user_id = :uid AND #ts > :day_ago AND outcome = :outcome',
+        # Check for recent timeouts (past 24 hours) with similar topics
+        recent_timeout_timestamp = int((datetime.utcnow() - timedelta(hours=24)).timestamp())
+        recent_response = interactions_table.scan(
+            FilterExpression='user_id = :uid AND #ts > :recent AND outcome = :outcome',
             ExpressionAttributeNames={'#ts': 'timestamp'},
-            ExpressionAttributeValues={':uid': user_id, ':day_ago': day_ago, ':outcome': 'Timed Out - No Response'}
+            ExpressionAttributeValues={
+                ':uid': user_id, 
+                ':recent': recent_timeout_timestamp,
+                ':outcome': 'Timed Out - No Response'
+            }
         )
         
-        timed_out = response.get('Items', [])
-        if timed_out:
-            timed_out.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
-            resume = timed_out[0]
-            print(f"Resuming timed-out conversation {resume['interaction_id']}")
-            interactions_table.update_item(
-                Key={'interaction_id': resume['interaction_id'], 'timestamp': resume['timestamp']},
-                UpdateExpression='SET outcome = :outcome',
-                ExpressionAttributeValues={':outcome': 'In Progress'}
-            )
-            return resume['interaction_id'], resume['timestamp'], False
+        recent_items = recent_response.get('Items', [])
+        if recent_items:
+            recent_items.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+            for recent in recent_items:
+                # Skip if awaiting approval
+                if recent.get('awaiting_approval'):
+                    continue
+                # Check if there's already a pending resumption to avoid duplicates
+                try:
+                    actions_table = dynamodb.Table('it-actions')
+                    pending_check = actions_table.scan(
+                        FilterExpression='user_id = :uid AND action_type = :at',
+                        ExpressionAttributeValues={':uid': user_id, ':at': 'pending_resumption'}
+                    )
+                    if pending_check.get('Items'):
+                        print(f"DEBUG: Pending resumption already exists, skipping")
+                        continue
+                except Exception as e:
+                    print(f"Error checking pending resumption: {e}")
+                    continue
+                # Compare topics using AI
+                if compare_topics(message_text, recent.get('description', '')):
+                    print(f"✅ Found related timeout conversation: {recent.get('interaction_id')}")
+                    return None, None, True, recent
         
+        print(f"DEBUG: Creating new conversation")
+        # Create new conversation
         interaction_id = str(uuid.uuid4())
         timestamp = int(datetime.utcnow().timestamp())
         interaction_type = categorize_interaction(message_text)
@@ -78,15 +108,34 @@ def get_or_create_conversation(user_id, user_name, message_text):
             'description': redacted_message[:200],
             'outcome': 'In Progress',
             'date': datetime.utcnow().isoformat(),
-            'conversation_history': json.dumps([{'timestamp': timestamp, 'message': redacted_message, 'from': 'user'}]),
+            'conversation_history': json.dumps([{'timestamp': datetime.utcnow().isoformat(), 'message': redacted_message, 'from': 'user'}]),
             'metadata': '{}'
         }
         
         interactions_table.put_item(Item=item)
-        return interaction_id, timestamp, True
+        return interaction_id, timestamp, True, None
     except Exception as e:
         print(f"Error in conversation tracking: {e}")
-        return None, 0, True
+        return None, 0, True, None
+
+def compare_topics(new_message, previous_description):
+    """Use simple keyword matching to determine if messages are related"""
+    try:
+        # Simple keyword-based matching for speed
+        new_lower = new_message.lower()
+        prev_lower = previous_description.lower()
+        
+        # Extract key nouns (simple approach)
+        keywords = ['printer', 'excel', 'word', 'outlook', 'teams', 'vpn', 'password', 'laptop', 'monitor', 'keyboard', 'mouse', 'network', 'wifi', 'email', 'access', 'login']
+        
+        new_keywords = [k for k in keywords if k in new_lower]
+        prev_keywords = [k for k in keywords if k in prev_lower]
+        
+        # If they share at least one keyword, consider them related
+        return bool(set(new_keywords) & set(prev_keywords))
+    except Exception as e:
+        print(f"Error comparing topics: {e}")
+        return False
 
 def redact_sensitive_data(text):
     """Redact sensitive information from conversation history"""
@@ -109,6 +158,18 @@ def redact_sensitive_data(text):
     text = re.sub(r'\b(code|mfa|2fa|otp)\s*(is|:)?\s*\d{6}\b', r'\1 ******', text, flags=re.IGNORECASE)
     
     return text
+
+def mark_conversation_awaiting_approval(interaction_id, timestamp):
+    """Mark conversation as awaiting approval to exclude from timeouts"""
+    try:
+        interactions_table.update_item(
+            Key={'interaction_id': interaction_id, 'timestamp': timestamp},
+            UpdateExpression='SET awaiting_approval = :val, outcome = :outcome',
+            ExpressionAttributeValues={':val': True, ':outcome': 'Awaiting Approval'}
+        )
+        print(f"✅ Marked {interaction_id} as awaiting approval")
+    except Exception as e:
+        print(f"Error marking conversation as awaiting approval: {e}")
 
 def update_conversation(interaction_id, timestamp, message_text, from_bot=False, outcome=None):
     """Update existing conversation"""
@@ -133,6 +194,10 @@ def update_conversation(interaction_id, timestamp, message_text, from_bot=False,
         if outcome:
             update_expr += ', outcome = :outcome'
             expr_values[':outcome'] = outcome
+            # Cancel schedules when conversation is closed
+            if outcome != 'In Progress':
+                cancel_schedules(timestamp, interaction_id)
+                print(f"✅ Cancelled schedules for closed conversation {interaction_id}")
         
         interactions_table.update_item(
             Key={'interaction_id': interaction_id, 'timestamp': timestamp},
@@ -224,26 +289,101 @@ def send_resolution_prompt(channel, user_id, interaction_id, timestamp):
     except Exception as e:
         print(f"Error sending resolution prompt: {e}")
 
-def schedule_auto_resolve(interaction_id, timestamp, user_id):
-    """Schedule auto-resolve after 15 minutes"""
+def cancel_schedules(timestamp, interaction_id=None):
+    """Cancel existing engagement and auto-resolve schedules"""
     try:
-        # Invoke Lambda async to handle auto-resolve
-        lambda_client = boto3.client('lambda')
-        payload = {
-            'auto_resolve': True,
-            'interaction_id': interaction_id,
-            'timestamp': timestamp,
-            'user_id': user_id,
-            'delay_minutes': 15
-        }
-        
-        lambda_client.invoke(
-            FunctionName=os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'it-helpdesk-bot'),
-            InvocationType='Event',
-            Payload=json.dumps(payload)
-        )
-        print(f"✅ Scheduled auto-resolve for {interaction_id}")
+        scheduler_client = boto3.client('scheduler')
+        # Use interaction_id if provided, otherwise use timestamp
+        schedule_suffix = interaction_id if interaction_id else str(timestamp)
+        for prefix in ['e5', 'e10', 'ar']:
+            try:
+                scheduler_client.delete_schedule(Name=f"{prefix}-{schedule_suffix}", GroupName='default')
+                print(f"✅ Cancelled schedule {prefix}-{schedule_suffix}")
+            except scheduler_client.exceptions.ResourceNotFoundException:
+                print(f"⏭️ Schedule {prefix}-{schedule_suffix} not found (already deleted)")
+            except Exception as e:
+                print(f"❌ Error cancelling schedule {prefix}-{schedule_suffix}: {e}")
     except Exception as e:
+        print(f"Error cancelling schedules: {e}")
+
+def schedule_auto_resolve(interaction_id, timestamp, user_id):
+    """Schedule engagement prompts at 5, 10 minutes and auto-resolve at 15 minutes"""
+    try:
+        # Convert Decimal to int if needed
+        timestamp = decimal_to_number(timestamp)
+        
+        scheduler_client = boto3.client('scheduler')
+        lambda_arn = f"arn:aws:lambda:us-east-1:843046951786:function:it-helpdesk-bot"
+        role_arn = "arn:aws:iam::843046951786:role/EventBridgeSchedulerRole"
+        
+        # Schedule 5-minute engagement prompt
+        schedule_time_5 = datetime.utcnow() + timedelta(minutes=5)
+        try:
+            scheduler_client.create_schedule(
+                Name=f"e5-{timestamp}",
+                ScheduleExpression=f"at({schedule_time_5.strftime('%Y-%m-%dT%H:%M:%S')})",
+                Target={
+                    'Arn': lambda_arn,
+                    'RoleArn': role_arn,
+                    'Input': json.dumps({
+                        'engagement_prompt': True,
+                        'interaction_id': interaction_id,
+                        'timestamp': timestamp,
+                        'user_id': user_id,
+                        'prompt_number': 1
+                    })
+                },
+                FlexibleTimeWindow={'Mode': 'OFF'}
+            )
+        except scheduler_client.exceptions.ConflictException:
+            print(f"Schedule e5-{timestamp} already exists, skipping")
+        
+        # Schedule 10-minute engagement prompt
+        schedule_time_10 = datetime.utcnow() + timedelta(minutes=10)
+        try:
+            scheduler_client.create_schedule(
+                Name=f"e10-{timestamp}",
+                ScheduleExpression=f"at({schedule_time_10.strftime('%Y-%m-%dT%H:%M:%S')})",
+                Target={
+                    'Arn': lambda_arn,
+                    'RoleArn': role_arn,
+                    'Input': json.dumps({
+                        'engagement_prompt': True,
+                        'interaction_id': interaction_id,
+                        'timestamp': timestamp,
+                        'user_id': user_id,
+                        'prompt_number': 2
+                    })
+                },
+                FlexibleTimeWindow={'Mode': 'OFF'}
+            )
+        except scheduler_client.exceptions.ConflictException:
+            print(f"Schedule e10-{timestamp} already exists, skipping")
+        
+        # Schedule 15-minute auto-resolve
+        schedule_time_15 = datetime.utcnow() + timedelta(minutes=15)
+        try:
+            scheduler_client.create_schedule(
+                Name=f"ar-{timestamp}",
+                ScheduleExpression=f"at({schedule_time_15.strftime('%Y-%m-%dT%H:%M:%S')})",
+                Target={
+                    'Arn': lambda_arn,
+                    'RoleArn': role_arn,
+                    'Input': json.dumps({
+                        'auto_resolve': True,
+                        'interaction_id': interaction_id,
+                        'timestamp': timestamp,
+                        'user_id': user_id
+                    })
+                },
+                FlexibleTimeWindow={'Mode': 'OFF'}
+            )
+        except scheduler_client.exceptions.ConflictException:
+            print(f"Schedule ar-{timestamp} already exists, skipping")
+        
+        print(f"✅ Scheduled engagement prompts (5, 10 min) and auto-resolve (15 min) for {interaction_id}")
+    except Exception as e:
+        print(f"Error scheduling engagement prompts: {e}")
         print(f"Error scheduling auto-resolve: {e}")
 
 def handle_resolution_button(action_id, user_id, channel):
@@ -318,7 +458,7 @@ SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', 'xoxb-your-token-here')
 
 # Confluence credentials
 CONFLUENCE_EMAIL = "mdenecke@dairy.com"
-CONFLUENCE_API_TOKEN = "ATATT3xFfGF0mlRvgDmJWe3cq8gvs4Pv31QYhswEtxsQogWJZWlwTgi20KFrole5aBHgZ0wYibEXjO9RaysG_mQ9-8mK2rOGFW_ilZ4iZq1wGC3uRklHARD7TOk2Vl_oKG7sqWAP-tngNE0-0Bcs7_UrP0DzP1btRrylWVhbr4CFjt1WcknKiWQ=A2D8BE4C"
+CONFLUENCE_API_TOKEN = os.environ.get('CONFLUENCE_API_TOKEN', 'your-confluence-token')
 CONFLUENCE_BASE_URL = "https://everag.atlassian.net/wiki"
 
 # Simple in-memory conversation tracking with full history
@@ -473,10 +613,11 @@ def check_pending_group_selection(user_email):
     try:
         table = dynamodb.Table('it-actions')
         response = table.scan(
-            FilterExpression='requester = :email AND pending_selection = :flag',
+            FilterExpression='requester = :email AND #status = :status',
+            ExpressionAttributeNames={'#status': 'status'},
             ExpressionAttributeValues={
                 ':email': user_email,
-                ':flag': True
+                ':status': 'PENDING_SELECTION'
             }
         )
         
@@ -540,15 +681,18 @@ def send_approval_request(user_id, user_name, user_email, distribution_list, ori
     """Send approval request to IT channel"""
     approval_id = f"dl_approval_{user_id}_{int(datetime.now().timestamp())}"
     
-    # Store pending approval
-    pending_approvals[approval_id] = {
+    # Store approval data in DynamoDB
+    actions_table = dynamodb.Table('it-actions')
+    actions_table.put_item(Item={
+        'action_id': approval_id,
         'user_id': user_id,
         'user_name': user_name,
         'user_email': user_email,
         'distribution_list': distribution_list,
         'original_message': original_message,
-        'timestamp': datetime.now().isoformat()
-    }
+        'timestamp': int(datetime.now().timestamp()),
+        'action_type': 'pending_approval'
+    })
     
     # Create approval message with buttons
     approval_message = {
@@ -706,21 +850,23 @@ def send_approval_request(user_id, user_name, user_email, distribution_list, ori
     """Send approval request to IT channel"""
     approval_id = f"dl_approval_{user_id}_{int(datetime.now().timestamp())}"
     
-    # Store pending approval
-    pending_approvals[approval_id] = {
+    # Store approval data in DynamoDB
+    actions_table = dynamodb.Table('it-actions')
+    actions_table.put_item(Item={
+        'action_id': approval_id,
         'user_id': user_id,
         'user_name': user_name,
         'user_email': user_email,
         'distribution_list': distribution_list,
         'original_message': original_message,
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': int(datetime.now().timestamp()),
+        'action_type': 'pending_approval',
         'interaction_id': conv_data.get('interaction_id') if conv_data else None,
         'interaction_timestamp': conv_data.get('timestamp') if conv_data else None
-    }
+    })
     
     # Create approval message with buttons
     approval_message = {
-        "channel": IT_APPROVAL_CHANNEL,
         "channel": IT_APPROVAL_CHANNEL,
         "text": f"Distribution List Access Request",
         "blocks": [
@@ -790,11 +936,37 @@ def handle_approval_response(action_id, user_id):
     if action_id.startswith('approve_'):
         approval_id = action_id.replace('approve_', '')
         
-        if approval_id in pending_approvals:
-            approval_data = pending_approvals[approval_id]
+        # Get approval data from DynamoDB
+        actions_table = dynamodb.Table('it-actions')
+        response = actions_table.get_item(Key={'action_id': approval_id})
+        
+        if 'Item' in response:
+            approval_data = response['Item']
+            
+            # Trigger it-action-processor to add user to DL
+            try:
+                lambda_client = boto3.client('lambda')
+                processor_response = lambda_client.invoke(
+                    FunctionName='it-action-processor',
+                    InvocationType='RequestResponse',
+                    Payload=json.dumps({
+                        "emailData": {
+                            "from": approval_data['user_email'],
+                            "body": f"Please add me to the {approval_data['distribution_list']} distribution list"
+                        },
+                        "action": "AUTOMATE_DL_ACCESS"
+                    })
+                )
+                
+                result = json.loads(processor_response['Payload'].read())
+                print(f"it-action-processor response: {result}")
+                
+                success_message = f"✅ Your request to join `{approval_data['distribution_list']}` has been approved and processed!"
+            except Exception as e:
+                print(f"Error invoking it-action-processor: {e}")
+                success_message = f"✅ Your request to join `{approval_data['distribution_list']}` has been approved! Please contact IT to complete the process."
             
             # Notify user of approval
-            success_message = f"✅ Your request to join `{approval_data['distribution_list']}` has been approved! Please contact IT to complete the process."
             send_slack_message_to_channel({
                 "channel": approval_data['user_id'],
                 "text": success_message
@@ -817,13 +989,17 @@ def handle_approval_response(action_id, user_id):
                 )
             
             # Clean up
-            del pending_approvals[approval_id]
+            actions_table.delete_item(Key={'action_id': approval_id})
             
     elif action_id.startswith('deny_'):
         approval_id = action_id.replace('deny_', '')
         
-        if approval_id in pending_approvals:
-            approval_data = pending_approvals[approval_id]
+        # Get approval data from DynamoDB
+        actions_table = dynamodb.Table('it-actions')
+        response = actions_table.get_item(Key={'action_id': approval_id})
+        
+        if 'Item' in response:
+            approval_data = response['Item']
             
             # Notify user of denial
             denial_message = f"❌ Your request to join `{approval_data['distribution_list']}` has been denied. Please contact IT for more information."
@@ -833,7 +1009,7 @@ def handle_approval_response(action_id, user_id):
             })
             
             # Clean up
-            del pending_approvals[approval_id]
+            actions_table.delete_item(Key={'action_id': approval_id})
 
 def track_user_message(user_id, message, is_bot_response=False, image_url=None):
     """Track user's messages and bot responses for full conversation history"""
@@ -943,7 +1119,60 @@ def get_confluence_content():
         print(f"Error fetching Confluence content: {e}")
         return ""
 
-def send_slack_message(channel, text):
+def get_confluence_images(page_id):
+    """Get image attachments from a Confluence page"""
+    try:
+        auth_string = f"{CONFLUENCE_EMAIL}:{CONFLUENCE_API_TOKEN}"
+        auth_b64 = base64.b64encode(auth_string.encode('ascii')).decode('ascii')
+        
+        url = f"{CONFLUENCE_BASE_URL}/rest/api/content/{page_id}/child/attachment"
+        req = urllib.request.Request(url)
+        req.add_header('Authorization', f'Basic {auth_b64}')
+        req.add_header('Accept', 'application/json')
+        
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            images = []
+            for attachment in data.get('results', []):
+                if attachment.get('metadata', {}).get('mediaType', '').startswith('image/'):
+                    images.append({
+                        'title': attachment.get('title'),
+                        'download_url': f"{CONFLUENCE_BASE_URL}{attachment['_links']['download']}"
+                    })
+            return images[:2]  # Limit to 2 images
+    except Exception as e:
+        print(f"Error getting Confluence images: {e}")
+        return []
+
+def upload_to_slack(channel, image_data, filename):
+    """Upload image to Slack"""
+    try:
+        boundary = f"----WebKitFormBoundary{uuid.uuid4().hex[:16]}"
+        body = []
+        body.append(f'--{boundary}'.encode())
+        body.append(f'Content-Disposition: form-data; name="channels"'.encode())
+        body.append(b'')
+        body.append(channel.encode())
+        body.append(f'--{boundary}'.encode())
+        body.append(f'Content-Disposition: form-data; name="file"; filename="{filename}"'.encode())
+        body.append(b'Content-Type: image/png')
+        body.append(b'')
+        body.append(base64.b64decode(image_data))
+        body.append(f'--{boundary}--'.encode())
+        body_bytes = b'\r\n'.join(body)
+        
+        req = urllib.request.Request('https://slack.com/api/files.upload', data=body_bytes)
+        req.add_header('Authorization', f'Bearer {SLACK_BOT_TOKEN}')
+        req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
+        
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result.get('ok', False)
+    except Exception as e:
+        print(f"Error uploading to Slack: {e}")
+        return False
+
+def send_slack_message(channel, text, blocks=None):
     """Send message to Slack using Web API"""
     try:
         url = 'https://slack.com/api/chat.postMessage'
@@ -952,6 +1181,9 @@ def send_slack_message(channel, text):
             'text': text,
             'as_user': True
         }
+        
+        if blocks:
+            data['blocks'] = blocks
         
         headers = {
             'Authorization': f'Bearer {SLACK_BOT_TOKEN}',
@@ -971,6 +1203,35 @@ def send_slack_message(channel, text):
     except Exception as e:
         print(f"Error sending Slack message: {e}")
         return False
+
+def send_error_recovery_message(channel, error_msg, interaction_id, timestamp, user_id):
+    """Send error message with recovery buttons"""
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"{error_msg}\n\nWhat would you like to do?"
+            }
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🎫 Create Ticket", "emoji": True},
+                    "action_id": f"error_ticket_{interaction_id}_{timestamp}",
+                    "style": "primary"
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🔄 Start Over", "emoji": True},
+                    "action_id": f"error_retry_{interaction_id}_{timestamp}"
+                }
+            ]
+        }
+    ]
+    send_slack_message(channel, "", blocks=blocks)
 
 def get_user_info_from_slack(user_id):
     """Get user name and email from Slack profile"""
@@ -1086,8 +1347,24 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             group_search = request_details.get('group_name', '')
             action = request_details.get('action', 'add')
             
+            # Send progress message with 5-second delay
+            import threading
+            search_complete = threading.Event()
+            
+            def send_progress_message():
+                if not search_complete.wait(5):
+                    msg = "🔍 Still working on it..."
+                    send_slack_message(channel, msg)
+                    conv_data = user_interaction_ids.get(user_id, {})
+                    if conv_data.get('interaction_id'):
+                        update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+            
+            progress_thread = threading.Thread(target=send_progress_message)
+            progress_thread.start()
+            
             # First try: search with original term
             matches = query_group_type(group_search)
+            search_complete.set()
             
             # If no matches, strip keywords and try again
             if not matches:
@@ -1098,30 +1375,45 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     matches = query_group_type(cleaned)
             
             if not matches:
-                send_slack_message(channel, f"❌ No groups found matching '{group_search}'")
+                msg = f"❌ No groups found matching '{group_search}'"
+                # Log to conversation history
+                conv_data = user_interaction_ids.get(user_id, {})
+                if conv_data.get('interaction_id'):
+                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                    send_error_recovery_message(channel, msg, conv_data['interaction_id'], conv_data['timestamp'], user_id)
+                else:
+                    send_slack_message(channel, msg)
                 return False
             
             if len(matches) > 1:
                 # Multiple matches - ask user to select
                 group_list = "\n".join([f"• {g['name']}" for g in matches])
-                send_slack_message(channel, f"🔍 Found multiple groups matching '{group_search}':\n\n{group_list}\n\nPlease reply with the exact group name you want.")
+                msg = f"🔍 Found multiple groups matching '{group_search}':\n\n{group_list}\n\nPlease reply with the exact group name you want."
+                send_slack_message(channel, msg)
+                
+                # Log to conversation history
+                conv_data = user_interaction_ids.get(user_id, {})
+                if conv_data.get('interaction_id'):
+                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                 
                 # Store pending selection
                 table = dynamodb.Table('it-actions')
                 table.put_item(Item={
-                    'action_id': f"pending_selection_{user_email}_{int(time.time())}",
+                    'action_id': f"pending_selection_{user_email}_{int(datetime.now().timestamp())}",
                     'requester': user_email,
                     'status': 'PENDING_SELECTION',
-                    'timestamp': int(time.time()),
+                    'timestamp': int(datetime.now().timestamp()),
                     'pending_selection': True,
                     'details': {
                         'similar_groups': [g['name'] for g in matches],
                         'action': action,
                         'channel': channel,
-                        'thread_ts': thread_ts
+                        'thread_ts': thread_ts,
+                        'user_id': user_id,
+                        'automation_type': automation_type
                     }
                 })
-                return True
+                return 'PENDING_SELECTION'
             
             # Single match - use exact group name
             exact_group = matches[0]['name']
@@ -1130,7 +1422,12 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             membership_status = check_membership(user_email, exact_group)
             
             if membership_status == "ALREADY_MEMBER":
-                send_slack_message(channel, f"ℹ️ You're already a member of **{exact_group}**.\n\nNo changes needed!")
+                msg = f"ℹ️ You're already a member of **{exact_group}**.\n\nNo changes needed!"
+                send_slack_message(channel, msg)
+                # Log to conversation history
+                conv_data = user_interaction_ids.get(user_id, {})
+                if conv_data.get('interaction_id'):
+                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                 return True
             elif membership_status == "USER_NOT_FOUND":
                 send_slack_message(channel, f"❌ Could not find your account in Active Directory. Please contact IT.")
@@ -1581,6 +1878,42 @@ def lambda_handler(event, context):
     print(f"Received event: {json.dumps(event)}")
     
     try:
+        # Handle callback result from brie-ad-group-manager
+        if event.get('callback_result'):
+            result_data = event.get('result_data', {})
+            slack_context = result_data.get('slackContext', {})
+            message = result_data.get('message', '')
+            status = result_data.get('status', '')
+            user_id = slack_context.get('user_id')
+            
+            if user_id and message:
+                # Find active conversation
+                timeout_timestamp = int((datetime.utcnow() - timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES)).timestamp())
+                response = interactions_table.scan(
+                    FilterExpression='user_id = :uid AND #ts > :timeout AND awaiting_approval = :awaiting',
+                    ExpressionAttributeNames={'#ts': 'timestamp'},
+                    ExpressionAttributeValues={
+                        ':uid': user_id,
+                        ':timeout': timeout_timestamp,
+                        ':awaiting': True
+                    }
+                )
+                
+                items = response.get('Items', [])
+                if items:
+                    items.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+                    conv = items[0]
+                    
+                    # Update conversation based on status
+                    if status == 'already_member':
+                        update_conversation(conv['interaction_id'], conv['timestamp'], message, from_bot=True, outcome='Resolved by Brie')
+                    elif status == 'failed':
+                        update_conversation(conv['interaction_id'], conv['timestamp'], message, from_bot=True)
+                    elif status == 'completed':
+                        update_conversation(conv['interaction_id'], conv['timestamp'], message, from_bot=True)
+            
+            return {'statusCode': 200, 'body': 'OK'}
+        
         # Handle approval notification from it-approval-system
         if event.get('approval_notification'):
             print("📥 Handling approval notification")
@@ -1603,12 +1936,12 @@ def lambda_handler(event, context):
                     print(f"Scanning for conversations after timestamp: {timeout_timestamp}")
                     
                     response = interactions_table.scan(
-                        FilterExpression='user_id = :uid AND #ts > :timeout AND outcome = :outcome',
+                        FilterExpression='user_id = :uid AND #ts > :timeout AND awaiting_approval = :awaiting',
                         ExpressionAttributeNames={'#ts': 'timestamp'},
                         ExpressionAttributeValues={
                             ':uid': user_id,
                             ':timeout': timeout_timestamp,
-                            ':outcome': 'In Progress'
+                            ':awaiting': True
                         }
                     )
                     
@@ -1642,11 +1975,6 @@ def lambda_handler(event, context):
                         
                         print(f"Updating conversation: {conv['interaction_id']}")
                         
-                        # Send Slack message to user
-                        channel = slack_context.get('channel')
-                        if channel:
-                            send_slack_message(channel, f"✅ {approval_message}")
-                        
                         update_conversation(
                             conv['interaction_id'],
                             conv['timestamp'],
@@ -1663,46 +1991,6 @@ def lambda_handler(event, context):
                     print(traceback.format_exc())
             else:
                 print("⚠️ No user_id in slack context")
-            
-            return {'statusCode': 200, 'body': 'OK'}
-        
-        # Handle callback result from brie-ad-group-manager or other callback functions
-        if event.get('callback_result'):
-            print("📥 Handling callback result")
-            result_data = event.get('result_data', {})
-            slack_context = result_data.get('slackContext', {})
-            message = result_data.get('message', '')
-            
-            user_id = slack_context.get('user_id')
-            
-            if user_id and message:
-                try:
-                    # Find active conversation
-                    timeout_timestamp = int((datetime.utcnow() - timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES)).timestamp())
-                    response = interactions_table.scan(
-                        FilterExpression='user_id = :uid AND #ts > :timeout',
-                        ExpressionAttributeNames={'#ts': 'timestamp'},
-                        ExpressionAttributeValues={
-                            ':uid': user_id,
-                            ':timeout': timeout_timestamp
-                        }
-                    )
-                    
-                    items = response.get('Items', [])
-                    if items:
-                        items.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
-                        conv = items[0]
-                        
-                        # Track the callback message
-                        update_conversation(
-                            conv['interaction_id'],
-                            conv['timestamp'],
-                            message,
-                            from_bot=True
-                        )
-                        print(f"✅ Tracked callback result in conversation")
-                except Exception as e:
-                    print(f"⚠️ Error tracking callback result: {e}")
             
             return {'statusCode': 200, 'body': 'OK'}
         
@@ -1729,6 +2017,153 @@ def lambda_handler(event, context):
                                 return {'statusCode': 200, 'body': 'OK'}
                             elif action_id.startswith(('resolved_', 'needhelp_', 'ticket_')):
                                 handle_resolution_button(action_id, user_id, channel)
+                                return {'statusCode': 200, 'body': 'OK'}
+                            elif action_id.startswith('engagement_'):
+                                # Handle engagement prompt buttons
+                                parts = action_id.split('_')
+                                action_type = parts[1]  # yes, ticket, or resolved
+                                interaction_id = parts[2]
+                                timestamp = int(parts[3])
+                                
+                                if action_type == 'yes':
+                                    # User still working on it
+                                    send_slack_message(channel, "👍 No problem, take your time. Let me know if you need anything!")
+                                    update_conversation(interaction_id, timestamp, "User confirmed still working on issue", from_bot=False)
+                                    # Cancel old schedules and create new ones (keep original timestamp for conversation lookup)
+                                    cancel_schedules(timestamp, interaction_id)
+                                    schedule_auto_resolve(interaction_id, timestamp, user_id)
+                                elif action_type == 'ticket':
+                                    # Create ticket (reuse existing logic)
+                                    handle_resolution_button(f"ticket_{interaction_id}_{timestamp}", user_id, channel)
+                                elif action_type == 'resolved':
+                                    # User is all set
+                                    send_slack_message(channel, "✅ Great! Glad I could help. Feel free to reach out anytime!")
+                                    cancel_schedules(timestamp, interaction_id)
+                                    update_conversation(interaction_id, timestamp, "User confirmed issue resolved", from_bot=False, outcome='Self-Service Solution')
+                                
+                                return {'statusCode': 200, 'body': 'OK'}
+                            elif action_id.startswith(('error_ticket_', 'error_retry_')):
+                                # Handle error recovery buttons
+                                parts = action_id.split('_')
+                                action_type = parts[1]  # ticket or retry
+                                interaction_id = parts[2]
+                                timestamp = int(parts[3])
+                                
+                                if action_type == 'ticket':
+                                    # Create ticket and close conversation
+                                    send_slack_message(channel, "🎫 Creating a ticket for IT support...")
+                                    cancel_schedules(timestamp, interaction_id)
+                                    update_conversation(interaction_id, timestamp, "User requested ticket after error", from_bot=False, outcome='Ticket Created')
+                                    handle_resolution_button(f"ticket_{interaction_id}_{timestamp}", user_id, channel)
+                                elif action_type == 'retry':
+                                    # Close conversation and allow fresh start
+                                    send_slack_message(channel, "🔄 Okay, let's start fresh. What can I help you with?")
+                                    cancel_schedules(timestamp, interaction_id)
+                                    update_conversation(interaction_id, timestamp, "User chose to start over after error", from_bot=False, outcome='Cancelled - User Retry')
+                                
+                                return {'statusCode': 200, 'body': 'OK'}
+                            elif action_id.startswith(('resumeyes_', 'resumeno_')):
+                                # Handle resumption response
+                                parts = action_id.split('_')
+                                action_type = parts[0]  # resumeyes or resumeno
+                                
+                                # Get pending resumption data
+                                actions_table = dynamodb.Table('it-actions')
+                                pending_items = actions_table.scan(
+                                    FilterExpression='user_id = :uid AND action_type = :at',
+                                    ExpressionAttributeValues={':uid': user_id, ':at': 'pending_resumption'}
+                                ).get('Items', [])
+                                
+                                if pending_items:
+                                    pending = pending_items[0]
+                                    old_interaction_id = pending['old_interaction_id']
+                                    old_timestamp = pending['old_timestamp']
+                                    new_message = pending['new_message']
+                                    channel = pending['channel']
+                                    
+                                    # Delete pending resumption
+                                    actions_table.delete_item(Key={'action_id': pending['action_id']})
+                                    
+                                    if action_type == 'resumeyes':
+                                        # Resume old conversation
+                                        send_slack_message(channel, "✅ Continuing your previous conversation...")
+                                        update_conversation(old_interaction_id, old_timestamp, new_message, from_bot=False, outcome='In Progress')
+                                        user_interaction_ids[user_id] = {'interaction_id': old_interaction_id, 'timestamp': old_timestamp}
+                                        
+                                        # Schedule engagement prompts
+                                        cancel_schedules(old_timestamp, old_interaction_id)
+                                        schedule_auto_resolve(old_interaction_id, old_timestamp, user_id)
+                                        
+                                        # Process the message with Claude
+                                        real_name, _ = get_user_info_from_slack(user_id)
+                                        user_name = real_name if real_name else f"user_{user_id}"
+                                        
+                                        send_slack_message(channel, "🔧 🤔 Let me think about that... I'll have an answer for you in just a moment!")
+                                        
+                                        lambda_client = boto3.client('lambda')
+                                        async_payload = {
+                                            'async_processing': True,
+                                            'user_message': new_message,
+                                            'user_name': user_name,
+                                            'user_id': user_id,
+                                            'channel': channel,
+                                            'image_url': None,
+                                            'image_detected': False,
+                                            'interaction_id': old_interaction_id,
+                                            'timestamp': int(old_timestamp)
+                                        }
+                                        lambda_client.invoke(
+                                            FunctionName=context.function_name,
+                                            InvocationType='Event',
+                                            Payload=json.dumps(async_payload)
+                                        )
+                                    else:
+                                        # Start new conversation
+                                        send_slack_message(channel, "✅ Starting a new conversation...")
+                                        real_name, _ = get_user_info_from_slack(user_id)
+                                        user_name = real_name if real_name else f"user_{user_id}"
+                                        
+                                        # Create new conversation
+                                        interaction_id = str(uuid.uuid4())
+                                        timestamp = int(datetime.utcnow().timestamp())
+                                        interaction_type = categorize_interaction(new_message)
+                                        redacted_message = redact_sensitive_data(new_message)
+                                        
+                                        item = {
+                                            'interaction_id': interaction_id,
+                                            'timestamp': timestamp,
+                                            'user_id': user_id,
+                                            'user_name': user_name,
+                                            'interaction_type': interaction_type,
+                                            'description': redacted_message[:200],
+                                            'outcome': 'In Progress',
+                                            'date': datetime.utcnow().isoformat(),
+                                            'conversation_history': json.dumps([{'timestamp': datetime.utcnow().isoformat(), 'message': redacted_message, 'from': 'user'}]),
+                                            'metadata': '{}'
+                                        }
+                                        interactions_table.put_item(Item=item)
+                                        user_interaction_ids[user_id] = {'interaction_id': interaction_id, 'timestamp': timestamp}
+                                        
+                                        send_slack_message(channel, "🔧 🤔 Let me think about that... I'll have an answer for you in just a moment!")
+                                        
+                                        lambda_client = boto3.client('lambda')
+                                        async_payload = {
+                                            'async_processing': True,
+                                            'user_message': new_message,
+                                            'user_name': user_name,
+                                            'user_id': user_id,
+                                            'channel': channel,
+                                            'image_url': None,
+                                            'image_detected': False,
+                                            'interaction_id': interaction_id,
+                                            'timestamp': timestamp
+                                        }
+                                        lambda_client.invoke(
+                                            FunctionName=context.function_name,
+                                            InvocationType='Event',
+                                            Payload=json.dumps(async_payload)
+                                        )
+                                
                                 return {'statusCode': 200, 'body': 'OK'}
                 
                 return {'statusCode': 200, 'body': 'OK'}
@@ -1761,12 +2196,146 @@ def lambda_handler(event, context):
                 
                 action_id = payload.get('actions', [{}])[0].get('action_id', '')
                 user_id = payload.get('user', {}).get('id', '')
+                channel = payload.get('container', {}).get('channel_id', '')
                 
                 if action_id.startswith(('approve_', 'deny_')):
                     handle_approval_response(action_id, user_id)
                     return {'statusCode': 200, 'body': 'OK'}
+                
+                if action_id.startswith(('error_ticket_', 'error_retry_')):
+                    # Handle error recovery buttons
+                    parts = action_id.split('_')
+                    action_type = parts[1]  # ticket or retry
+                    interaction_id = parts[2]
+                    timestamp = int(parts[3])
+                    
+                    if action_type == 'ticket':
+                        # Create ticket and close conversation
+                        send_slack_message(channel, "🎫 Creating a ticket for IT support...")
+                        cancel_schedules(timestamp, interaction_id)
+                        update_conversation(interaction_id, timestamp, "User requested ticket after error", from_bot=False, outcome='Ticket Created')
+                        handle_resolution_button(f"ticket_{interaction_id}_{timestamp}", user_id, channel)
+                    elif action_type == 'retry':
+                        # Close conversation and allow fresh start
+                        send_slack_message(channel, "🔄 Okay, let's start fresh. What can I help you with?")
+                        cancel_schedules(timestamp, interaction_id)
+                        update_conversation(interaction_id, timestamp, "User chose to start over after error", from_bot=False, outcome='Cancelled - User Retry')
+                    
+                    return {'statusCode': 200, 'body': 'OK'}
+                
+                if action_id.startswith(('resumeyes_', 'resumeno_')):
+                    # Handle resumption response
+                    parts = action_id.split('_')
+                    action_type = parts[0]  # resumeyes or resumeno
+                    user_id_from_action = parts[2]
+                    prompt_ts = parts[3]
+                    
+                    # Get pending resumption data
+                    actions_table = dynamodb.Table('it-actions')
+                    pending_items = actions_table.scan(
+                        FilterExpression='user_id = :uid AND action_type = :at',
+                        ExpressionAttributeValues={':uid': user_id, ':at': 'pending_resumption'}
+                    ).get('Items', [])
+                    
+                    if pending_items:
+                        pending = pending_items[0]
+                        old_interaction_id = pending['old_interaction_id']
+                        old_timestamp = pending['old_timestamp']
+                        new_message = pending['new_message']
+                        channel = pending['channel']
+                        
+                        # Delete pending resumption
+                        actions_table.delete_item(Key={'action_id': pending['action_id']})
+                        
+                        if action_type == 'resumeyes':
+                            # Resume old conversation
+                            send_slack_message(channel, "✅ Continuing your previous conversation...")
+                            update_conversation(old_interaction_id, old_timestamp, new_message, from_bot=False, outcome='In Progress')
+                            user_interaction_ids[user_id] = {'interaction_id': old_interaction_id, 'timestamp': old_timestamp}
+                            
+                            # Schedule engagement prompts
+                            cancel_schedules(old_timestamp, old_interaction_id)
+                            schedule_auto_resolve(old_interaction_id, old_timestamp, user_id)
+                            
+                            # Process the message with Claude
+                            real_name, _ = get_user_info_from_slack(user_id)
+                            user_name = real_name if real_name else f"user_{user_id}"
+                            
+                            send_slack_message(channel, "🔧 🤔 Let me think about that... I'll have an answer for you in just a moment!")
+                            
+                            lambda_client = boto3.client('lambda')
+                            async_payload = {
+                                'async_processing': True,
+                                'user_message': new_message,
+                                'user_name': user_name,
+                                'user_id': user_id,
+                                'channel': channel,
+                                'image_url': None,
+                                'image_detected': False,
+                                'interaction_id': old_interaction_id,
+                                'timestamp': int(old_timestamp)
+                            }
+                            lambda_client.invoke(
+                                FunctionName=context.function_name,
+                                InvocationType='Event',
+                                Payload=json.dumps(async_payload)
+                            )
+                        else:
+                            # Start new conversation
+                            send_slack_message(channel, "✅ Starting a new conversation...")
+                            real_name, _ = get_user_info_from_slack(user_id)
+                            user_name = real_name if real_name else f"user_{user_id}"
+                            
+                            # Create new conversation
+                            interaction_id = str(uuid.uuid4())
+                            timestamp = int(datetime.utcnow().timestamp())
+                            interaction_type = categorize_interaction(new_message)
+                            redacted_message = redact_sensitive_data(new_message)
+                            
+                            item = {
+                                'interaction_id': interaction_id,
+                                'timestamp': timestamp,
+                                'user_id': user_id,
+                                'user_name': user_name,
+                                'interaction_type': interaction_type,
+                                'description': redacted_message[:200],
+                                'outcome': 'In Progress',
+                                'date': datetime.utcnow().isoformat(),
+                                'conversation_history': json.dumps([{'timestamp': datetime.utcnow().isoformat(), 'message': redacted_message, 'from': 'user'}]),
+                                'metadata': '{}'
+                            }
+                            interactions_table.put_item(Item=item)
+                            user_interaction_ids[user_id] = {'interaction_id': interaction_id, 'timestamp': timestamp}
+                            
+                            send_slack_message(channel, "🔧 🤔 Let me think about that... I'll have an answer for you in just a moment!")
+                            
+                            lambda_client = boto3.client('lambda')
+                            async_payload = {
+                                'async_processing': True,
+                                'user_message': new_message,
+                                'user_name': user_name,
+                                'user_id': user_id,
+                                'channel': channel,
+                                'image_url': None,
+                                'image_detected': False,
+                                'interaction_id': interaction_id,
+                                'timestamp': timestamp
+                            }
+                            lambda_client.invoke(
+                                FunctionName=context.function_name,
+                                InvocationType='Event',
+                                Payload=json.dumps(async_payload)
+                            )
+                    
+                    return {'statusCode': 200, 'body': 'OK'}
             
             if body.get('type') == 'event_callback':
+                # Check for Slack retries - ignore them to prevent duplicate processing
+                headers = event.get('headers', {})
+                if headers.get('X-Slack-Retry-Num') or headers.get('x-slack-retry-num'):
+                    print(f"⚠️ Ignoring Slack retry: {headers.get('X-Slack-Retry-Num') or headers.get('x-slack-retry-num')}")
+                    return {'statusCode': 200, 'body': 'OK'}
+                
                 slack_event = body['event']
                 
                 # Comprehensive bot message filtering to prevent loops
@@ -1785,19 +2354,182 @@ def lambda_handler(event, context):
                     message = slack_event.get('text', '')
                     channel = slack_event.get('channel')
                     
-                    # Track conversation
-                    interaction_id, timestamp, is_new = get_or_create_conversation(user_id, user_name, message)
+                    # Send immediate acknowledgment
+                    send_slack_message(channel, "🔍 Checking your request...")
                     
-                    # Check for Slack retries - ignore them to prevent duplicate processing
-                    headers = event.get('headers', {})
-                    if headers.get('X-Slack-Retry-Num') or headers.get('x-slack-retry-num'):
-                        print(f"⚠️ Ignoring Slack retry: {headers.get('X-Slack-Retry-Num') or headers.get('x-slack-retry-num')}")
+                    # Check if user has pending group selection
+                    actions_table = dynamodb.Table('it-actions')
+                    pending_items = actions_table.scan(
+                        FilterExpression='requester = :email AND #status = :status',
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={':email': user_email, ':status': 'PENDING_SELECTION'}
+                    ).get('Items', [])
+                    
+                    if pending_items:
+                        pending = pending_items[0]
+                        similar_groups = pending['details']['similar_groups']
+                        
+                        # Check if user's message matches one of the groups
+                        # Strip Slack link formatting: <http://ever.ag|ever.ag> -> ever.ag
+                        import re
+                        user_selection = message.strip()
+                        print(f"DEBUG: Original message: {user_selection}")
+                        user_selection = re.sub(r'<http[s]?://([^|>]+)\|([^>]+)>', r'\2', user_selection)
+                        user_selection = re.sub(r'<http[s]?://([^>]+)>', r'\1', user_selection)
+                        print(f"DEBUG: After stripping links: {user_selection}")
+                        
+                        # Try exact match first
+                        matched_group = None
+                        if user_selection in similar_groups:
+                            matched_group = user_selection
+                        else:
+                            # Try case-insensitive match
+                            user_lower = user_selection.lower()
+                            for group in similar_groups:
+                                if group.lower() == user_lower:
+                                    matched_group = group
+                                    break
+                        
+                        print(f"DEBUG: Matched group: {matched_group}")
+                        
+                        if matched_group:
+                            # User selected a valid group
+                            send_slack_message(channel, f"✅ Got it! Processing your request for **{matched_group}**...")
+                            
+                            # Delete pending selection
+                            actions_table.delete_item(Key={'action_id': pending['action_id']})
+                            
+                            # Bypass action processor - we already have the exact group name
+                            # Directly create approval request
+                            lambda_client = boto3.client('lambda')
+                            
+                            request_details = {
+                                'user_email': user_email,
+                                'group_name': matched_group,
+                                'action': 'add',
+                                'requester': user_email
+                            }
+                            
+                            email_data = {
+                                'sender': user_email,
+                                'subject': f'SSO Group Access Request: {matched_group}',
+                                'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
+                                'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
+                                'source': 'it-helpdesk-bot'
+                            }
+                            
+                            approval_response = lambda_client.invoke(
+                                FunctionName='it-approval-system',
+                                InvocationType='Event',
+                                Payload=json.dumps({
+                                    "action": "create_approval",
+                                    "approvalType": "SSO_GROUP",
+                                    "requester": user_email,
+                                    "ssoGroupRequest": request_details,
+                                    "emailData": email_data,
+                                    "details": f"User: {user_email}\nGroup: {matched_group}\nAction: add",
+                                    "callback_function": "brie-ad-group-manager",
+                                    "callback_params": {
+                                        "ssoGroupRequest": request_details,
+                                        "emailData": email_data
+                                    }
+                                })
+                            )
+                            
+                            # Mark conversation as awaiting approval
+                            conv_data = user_interaction_ids.get(user_id, {})
+                            if conv_data.get('interaction_id'):
+                                mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                
+                                # Create SSO interaction tracking for callback
+                                print(f"📝 Creating SSO interaction tracking for {conv_data['interaction_id']}")
+                                tracking_id = f"sso_tracking_{user_id}_{int(datetime.utcnow().timestamp())}"
+                                actions_table.put_item(Item={
+                                    'action_id': tracking_id,
+                                    'action_type': 'sso_interaction_tracking',
+                                    'interaction_id': conv_data['interaction_id'],
+                                    'interaction_timestamp': conv_data['timestamp'],
+                                    'user_email': user_email,
+                                    'group_name': matched_group,
+                                    'timestamp': int(datetime.utcnow().timestamp())
+                                })
+                                print(f"✅ Created tracking record: {tracking_id}")
+                            
+                            msg = f"✅ Your SSO group request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                            send_slack_message(channel, msg)
+                            
+                            if conv_data.get('interaction_id'):
+                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                            
+                            return {'statusCode': 200, 'body': 'OK'}
+                        else:
+                            # Invalid selection
+                            send_slack_message(channel, f"❌ '{user_selection}' doesn't match any of the groups I showed you. Please reply with the exact group name from the list.")
+                            return {'statusCode': 200, 'body': 'OK'}
+                    
+                    # Track conversation
+                    interaction_id, timestamp, is_new, resumption_conv = get_or_create_conversation(user_id, user_name, message)
+                    
+                    # Check if resumption prompt is needed
+                    if resumption_conv:
+                        # Show resumption prompt
+                        old_description = resumption_conv.get('description', 'your previous issue')
+                        prompt_ts = int(datetime.utcnow().timestamp())
+                        
+                        blocks = [
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f":wave: Welcome back! I see you had a previous conversation about:\n\n> {old_description}\n\nIs your new message related to this issue?"
+                                }
+                            },
+                            {
+                                "type": "actions",
+                                "elements": [
+                                    {
+                                        "type": "button",
+                                        "text": {"type": "plain_text", "text": ":white_check_mark: Yes, same issue", "emoji": True},
+                                        "action_id": f"resumeyes_pending_{user_id}_{prompt_ts}",
+                                        "style": "primary"
+                                    },
+                                    {
+                                        "type": "button",
+                                        "text": {"type": "plain_text", "text": ":x: No, different issue", "emoji": True},
+                                        "action_id": f"resumeno_pending_{user_id}_{prompt_ts}"
+                                    }
+                                ]
+                            }
+                        ]
+                        
+                        send_slack_message(channel, "", blocks=blocks)
+                        
+                        # Store pending resumption
+                        actions_table = dynamodb.Table('it-actions')
+                        actions_table.put_item(Item={
+                            'action_id': f"pending_resumption_{user_id}_{prompt_ts}",
+                            'user_id': user_id,
+                            'action_type': 'pending_resumption',
+                            'timestamp': prompt_ts,
+                            'old_interaction_id': resumption_conv['interaction_id'],
+                            'old_timestamp': resumption_conv['timestamp'],
+                            'new_message': message,
+                            'channel': channel
+                        })
+                        
                         return {'statusCode': 200, 'body': 'OK'}
+                    
                     if not is_new:
                         # Update existing conversation
                         update_conversation(interaction_id, timestamp, message, from_bot=False)
+                        
+                        # Cancel existing schedules and create new ones (keep original timestamp)
+                        cancel_schedules(timestamp, interaction_id)
+                        schedule_auto_resolve(interaction_id, timestamp, user_id)
+                        
                         # Check if user indicates resolution
                         if detect_resolution(message):
+                            cancel_schedules(timestamp, interaction_id)
                             update_conversation(interaction_id, timestamp, message, from_bot=False, outcome='Self-Service Solution')
                     
                     # Store for later use
@@ -1927,12 +2659,12 @@ Need help with the form? Just ask!"""
                     real_name, user_email = get_user_info_from_slack(user_id)
                     if user_email:
                         pending_selection = check_pending_group_selection(user_email)
+                        print(f"DEBUG - Pending selection for {user_email}: {pending_selection}")
                         
                         if pending_selection:
                             # User is responding to group selection prompt
                             details = pending_selection.get('details', {})
                             similar_groups = details.get('similar_groups', [])
-                            selection_type = details.get('type', 'SSO_GROUP')
                             
                             # Check if message matches one of the similar groups
                             selected_group = None
@@ -1942,33 +2674,49 @@ Need help with the form? Just ask!"""
                                     break
                             
                             if selected_group:
+                                # User selected a valid group
+                                msg = f"✅ Got it! Requesting access to **{selected_group}**..."
+                                send_slack_message(channel, msg)
+                                
+                                # Log to conversation history
+                                conv_data = user_interaction_ids.get(user_id, {})
+                                if conv_data.get('interaction_id'):
+                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                
                                 # Delete pending selection
                                 table = dynamodb.Table('it-actions')
                                 table.delete_item(Key={'action_id': pending_selection['action_id']})
                                 
+                                action = details.get('action', 'add')
+                                request_type = details.get('type', 'SSO_GROUP')
+                                
                                 # Handle based on type
-                                if selection_type == 'DISTRIBUTION_LIST':
-                                    msg = f"✅ Got it! Requesting access to **{selected_group}**..."
+                                if request_type == 'DISTRIBUTION_LIST':
+                                    # Get conversation data
+                                    conv_data = user_interaction_ids.get(user_id, {})
+                                    
+                                    # Send DL approval
+                                    approval_id = send_approval_request(user_id, real_name, user_email, selected_group, f"add me to {selected_group}", conv_data)
+                                    
+                                    # Mark conversation as awaiting approval
+                                    if conv_data.get('interaction_id'):
+                                        mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                    
+                                    msg = f"✅ Your request for **{selected_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                                     send_slack_message(channel, msg)
                                     
-                                    # Track in conversation
-                                    conv_data = user_interaction_ids.get(user_id, {})
-                                    if conv_data:
+                                    # Log to conversation history
+                                    if conv_data.get('interaction_id'):
                                         update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                                     
-                                    send_approval_request(user_id, real_name, user_email, selected_group, f"Add me to the {selected_group} dl")
                                     return {'statusCode': 200, 'body': 'OK'}
                                 
-                                # User selected a valid group - create new SSO request
-                                send_slack_message(channel, f"✅ Got it! Requesting access to **{selected_group}**...")
-                                
-                                # Create SSO request directly with exact group name
+                                # SSO Group handling
                                 lambda_client = boto3.client('lambda')
-                                action = details.get('action', 'add')
                                 
                                 sso_request = {
                                     'user_email': user_email,
-                                    'group_name': selected_group,  # Use exact group name
+                                    'group_name': selected_group,
                                     'action': action,
                                     'requester': user_email
                                 }
@@ -2004,6 +2752,22 @@ Need help with the form? Just ask!"""
                                     print(f"⚠️ Membership check failed, proceeding with approval")
                                 
                                 # Send approval request directly
+                                conv_data = user_interaction_ids.get(user_id, {})
+                                
+                                # Store interaction tracking for this approval
+                                if conv_data.get('interaction_id'):
+                                    actions_table = dynamodb.Table('it-actions')
+                                    tracking_id = f"sso_tracking_{user_id}_{int(datetime.now().timestamp())}"
+                                    actions_table.put_item(Item={
+                                        'action_id': tracking_id,
+                                        'action_type': 'sso_interaction_tracking',
+                                        'interaction_id': conv_data['interaction_id'],
+                                        'interaction_timestamp': conv_data['timestamp'],
+                                        'user_email': user_email,
+                                        'group_name': selected_group,
+                                        'timestamp': int(datetime.now().timestamp())
+                                    })
+                                
                                 approval_response = lambda_client.invoke(
                                     FunctionName='it-approval-system',
                                     InvocationType='Event',
@@ -2017,12 +2781,30 @@ Need help with the form? Just ask!"""
                                         "callback_function": "brie-ad-group-manager",
                                         "callback_params": {
                                             "ssoGroupRequest": sso_request,
-                                            "emailData": email_data
+                                            "emailData": email_data,
+                                            "interaction_id": conv_data.get('interaction_id'),
+                                            "interaction_timestamp": conv_data.get('timestamp')
                                         }
                                     })
                                 )
                                 
-                                send_slack_message(channel, f"✅ Your request for **{selected_group}** is being processed. IT will review and approve shortly.")
+                                # Mark conversation as awaiting approval
+                                if conv_data.get('interaction_id'):
+                                    print(f"🔵 SSO PATH: Marking conversation as awaiting approval")
+                                    mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                
+                                msg = f"✅ Your request for **{selected_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                                print(f"🔵 SSO PATH: Sending approval message to Slack")
+                                send_slack_message(channel, msg)
+                                
+                                # Log to conversation history
+                                if conv_data.get('interaction_id'):
+                                    print(f"📝 Adding approval message to conversation history: {conv_data['interaction_id']}")
+                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                    print(f"✅ Approval message added to conversation history")
+                                else:
+                                    print(f"⚠️ No interaction_id found in conv_data for SSO approval message")
+                                
                                 return {'statusCode': 200, 'body': 'OK'}
                             else:
                                 # Message doesn't match any of the options
@@ -2030,7 +2812,6 @@ Need help with the form? Just ask!"""
                                 return {'statusCode': 200, 'body': 'OK'}
                     
                     # Check for automation requests (DL, Mailbox, SSO) - NEW UNIFIED APPROACH
-                    # Skip if message contains "dl" - will be handled by DL detection below
                     automation_type = None
                     if 'dl' not in message_lower and 'distribution list' not in message_lower:
                         automation_type = detect_automation_request(message)
@@ -2041,71 +2822,57 @@ Need help with the form? Just ask!"""
                         if not user_email:
                             send_slack_message(channel, "❌ Unable to retrieve your email address. Please contact IT directly.")
                             return {'statusCode': 200, 'body': 'OK'}
-                    
-                        # Check for recent duplicate requests (within last 60 seconds)
-                        try:
-                            table = dynamodb.Table('it-actions')
-                            recent_cutoff = int(time.time()) - 60
-                            response = table.query(
-                                IndexName='requester-timestamp-index',
-                                KeyConditionExpression='requester = :email AND #ts > :cutoff',
-                                ExpressionAttributeNames={'#ts': 'timestamp'},
-                                ExpressionAttributeValues={
-                                    ':email': user_email,
-                                    ':cutoff': recent_cutoff
-                                }
-                            )
                         
-                            # Extract group name from current message
-                            current_group = None
-                            for match_type in ['sso_group', 'distribution_list', 'mailbox']:
-                                if automation_type.get(match_type):
-                                    current_group = automation_type[match_type].lower()
-                                    break
+                        # Trigger Step Functions workflow
+                        execution_arn = trigger_automation_workflow(
+                            user_email, 
+                            real_name, 
+                            message, 
+                            channel, 
+                            slack_event.get('ts', ''),
+                            automation_type,
+                            user_id
+                        )
                         
-                            if current_group:
-                                for item in response.get('Items', []):
-                                    details = item.get('details', {})
-                                    existing_group = details.get('group_name', '').lower()
-                                    if existing_group and current_group in existing_group or existing_group in current_group:
-                                        print(f"⚠️ Duplicate request detected for {current_group} within 60s, skipping")
-                                        return {'statusCode': 200, 'body': 'OK'}
-                        except Exception as e:
-                            print(f"⚠️ Deduplication check failed: {e}, proceeding anyway")
-                    
-                        # Trigger Step Functions workflow with timeout message
-                        import threading
-                        result = [None]
-                        
-                        def run_workflow():
-                            result[0] = trigger_automation_workflow(
-                                user_email, 
-                                real_name, 
-                                message, 
-                                channel, 
-                                slack_event.get('ts', ''),
-                                automation_type,
-                                user_id
-                            )
-                        
-                        thread = threading.Thread(target=run_workflow)
-                        thread.start()
-                        thread.join(timeout=3)
-                        
-                        if thread.is_alive():
-                            send_slack_message(channel, "🔄 Processing your request... this may take up to 30 seconds.")
-                            thread.join()
-                        
-                        execution_arn = result[0]
-                        
-                        if execution_arn:
-                            msg = f"✅ Your {automation_type.replace('_', ' ').lower()} request is being processed. IT will review and approve shortly."
+                        if execution_arn == 'PENDING_SELECTION':
+                            # User needs to select from multiple groups - don't mark as awaiting approval yet
+                            print(f"⏳ Waiting for user to select from multiple groups")
+                            return {'statusCode': 200, 'body': 'OK'}
+                        elif execution_arn:
+                            # Mark conversation as awaiting approval
+                            conv_data = user_interaction_ids.get(user_id, {})
+                            if conv_data.get('interaction_id'):
+                                mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                
+                                # Store interaction tracking for SSO approvals
+                                if automation_type == 'SSO_GROUP':
+                                    print(f"📝 Creating SSO interaction tracking for {conv_data['interaction_id']}")
+                                    actions_table = dynamodb.Table('it-actions')
+                                    tracking_id = f"sso_tracking_{user_id}_{int(datetime.now().timestamp())}"
+                                    actions_table.put_item(Item={
+                                        'action_id': tracking_id,
+                                        'action_type': 'sso_interaction_tracking',
+                                        'interaction_id': conv_data['interaction_id'],
+                                        'interaction_timestamp': conv_data['timestamp'],
+                                        'user_email': user_email,
+                                        'group_name': '',
+                                        'timestamp': int(datetime.now().timestamp())
+                                    })
+                                    print(f"✅ Created tracking record: {tracking_id}")
+                            
+                            msg = f"✅ Your {automation_type.replace('_', ' ').lower()} request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                             send_slack_message(channel, msg)
-                            update_conversation(interaction_id, timestamp, msg, from_bot=True)
+                            
+                            # Log to conversation history
+                            if conv_data.get('interaction_id'):
+                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                         else:
                             msg = "❌ Error processing your request. Please try again or contact IT directly."
-                            send_slack_message(channel, msg)
-                            update_conversation(interaction_id, timestamp, msg, from_bot=True)
+                            if conv_data.get('interaction_id'):
+                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                send_error_recovery_message(channel, msg, conv_data['interaction_id'], conv_data['timestamp'], user_id)
+                            else:
+                                send_slack_message(channel, msg)
                         
                         return {'statusCode': 200, 'body': 'OK'}
                     
@@ -2188,38 +2955,33 @@ Need help with the form? Just ask!"""
                         real_name, user_email = get_user_info_from_slack(user_id)
                         distribution_list = extract_distribution_list_name(message)
                         
-                        # Search Exchange for matching DLs with timeout message
+                        # Search Exchange for matching DLs with progress indicator
                         import threading
-                        result = [None]
+                        search_complete = threading.Event()
                         
-                        def search_dls():
-                            result[0] = query_group_type(distribution_list)
+                        def send_progress_message():
+                            if not search_complete.wait(5):
+                                msg = "🔍 Still working on it..."
+                                send_slack_message(channel, msg)
+                                conv_data = user_interaction_ids.get(user_id, {})
+                                if conv_data.get('interaction_id'):
+                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                         
-                        thread = threading.Thread(target=search_dls)
-                        thread.start()
-                        thread.join(timeout=3)
+                        progress_thread = threading.Thread(target=send_progress_message)
+                        progress_thread.start()
                         
-                        if thread.is_alive():
-                            msg = "🔄 Searching for distribution lists... this may take up to 30 seconds."
-                            send_slack_message(channel, msg)
-                            update_conversation(interaction_id, timestamp, msg, from_bot=True)
-                            thread.join()
-                        
-                        matches = result[0]
+                        matches = query_group_type(distribution_list)
+                        search_complete.set()
                         
                         if not matches:
-                            msg = f"❌ No distribution lists found matching '{distribution_list}'"
-                            send_slack_message(channel, msg)
-                            update_conversation(interaction_id, timestamp, msg, from_bot=True)
+                            send_slack_message(channel, f"❌ No distribution lists found matching '{distribution_list}'")
                             return {'statusCode': 200, 'body': 'OK'}
                         
                         # Filter to only show DLs
                         dl_matches = [m for m in matches if m['type'] == 'DISTRIBUTION_LIST']
                         
                         if not dl_matches:
-                            msg = f"❌ No distribution lists found matching '{distribution_list}'. Found SSO groups instead - try 'add me to {distribution_list} sso group'"
-                            send_slack_message(channel, msg)
-                            update_conversation(interaction_id, timestamp, msg, from_bot=True)
+                            send_slack_message(channel, f"❌ No distribution lists found matching '{distribution_list}'. Found SSO groups instead - try 'add me to {distribution_list} sso group'")
                             return {'statusCode': 200, 'body': 'OK'}
                         
                         if len(dl_matches) > 1:
@@ -2227,15 +2989,24 @@ Need help with the form? Just ask!"""
                             group_list = "\n".join([f"• {g['name']}" for g in dl_matches])
                             msg = f"🔍 Found multiple distribution lists matching '{distribution_list}':\n\n{group_list}\n\nPlease reply with the exact list name you want."
                             send_slack_message(channel, msg)
-                            update_conversation(interaction_id, timestamp, msg, from_bot=True)
+                            
+                            # Log to conversation history
+                            conv_data = user_interaction_ids.get(user_id, {})
+                            if conv_data.get('interaction_id'):
+                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                            
+                            # Schedule engagement prompts for this conversation
+                            conv_data = user_interaction_ids.get(user_id, {})
+                            if conv_data.get('interaction_id'):
+                                schedule_auto_resolve(conv_data['interaction_id'], conv_data['timestamp'], user_id)
                             
                             # Store pending selection
                             table = dynamodb.Table('it-actions')
                             table.put_item(Item={
-                                'action_id': f"pending_selection_{user_email}_{int(time.time())}",
+                                'action_id': f"pending_selection_{user_email}_{int(datetime.now().timestamp())}",
                                 'requester': user_email,
                                 'status': 'PENDING_SELECTION',
-                                'timestamp': int(time.time()),
+                                'timestamp': int(datetime.now().timestamp()),
                                 'pending_selection': True,
                                 'details': {
                                     'similar_groups': [g['name'] for g in dl_matches],
@@ -2250,8 +3021,15 @@ Need help with the form? Just ask!"""
                         # Single match - use exact name
                         exact_dl = dl_matches[0]['name']
                         
+                        # Get conversation data
+                        conv_data = user_interaction_ids.get(user_id, {})
+                        
                         # Send approval request
-                        approval_id = send_approval_request(user_id, real_name, user_email, exact_dl, message)
+                        approval_id = send_approval_request(user_id, real_name, user_email, exact_dl, message, conv_data)
+                        
+                        # Mark conversation as awaiting approval
+                        if conv_data.get('interaction_id'):
+                            mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
                         
                         response = f"""📧 **Distribution List Request Received**
 
@@ -2261,7 +3039,6 @@ Need help with the form? Just ask!"""
 I've sent your request to the IT team for approval. You'll be notified once they review it!"""
                         
                         send_slack_message(channel, response)
-                        update_conversation(interaction_id, timestamp, response, from_bot=True)
                         return {'statusCode': 200, 'body': 'OK'}
                     
                     else:
@@ -2303,24 +3080,149 @@ I've sent your request to the IT team for approval. You'll be notified once they
                         # Return immediately to prevent Slack retries
                         return {'statusCode': 200, 'body': 'OK'}
         
-        # Handle auto-resolve after timeout
-        elif event.get('auto_resolve'):
-            delay_minutes = event.get('delay_minutes', 15)
-            time.sleep(delay_minutes * 60)
-            
+        # Handle engagement prompts
+        elif event.get('engagement_prompt'):
             interaction_id = event['interaction_id']
             timestamp = event['timestamp']
+            user_id = event['user_id']
+            prompt_number = event.get('prompt_number', 1)
+            
+            # Check if conversation is still in progress
+            response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': timestamp})
+            if 'Item' in response:
+                item = response['Item']
+                # Skip if awaiting approval or already closed
+                if item.get('awaiting_approval') or item.get('outcome') != 'In Progress':
+                    print(f"⏭️ Skipping engagement prompt for {interaction_id} - not in progress")
+                    return {'statusCode': 200, 'body': 'OK'}
+                
+                # Get user's channel
+                user_info = interactions_table.scan(
+                    FilterExpression='user_id = :uid',
+                    ExpressionAttributeValues={':uid': user_id},
+                    Limit=1
+                )
+                
+                # Send engagement prompt with buttons
+                if prompt_number == 1:
+                    message = f"👋 Are you still there? Do you still need help with {item.get('description', 'your request')}?"
+                else:
+                    message = f"👋 Just checking in - are you still working on {item.get('description', 'your request')}?"
+                
+                # Get channel from DynamoDB or use direct message
+                channel = f"@{user_id}"
+                
+                blocks = [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": message
+                        }
+                    },
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "✅ Yes, still working on it", "emoji": True},
+                                "action_id": f"engagement_yes_{interaction_id}_{timestamp}",
+                                "style": "primary"
+                            },
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "🎫 Create Ticket", "emoji": True},
+                                "action_id": f"engagement_ticket_{interaction_id}_{timestamp}"
+                            },
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "✅ No, I'm all set", "emoji": True},
+                                "action_id": f"engagement_resolved_{interaction_id}_{timestamp}",
+                                "style": "primary"
+                            }
+                        ]
+                    }
+                ]
+                
+                send_slack_message(channel, message, blocks=blocks)
+                
+                # Log to conversation history
+                update_conversation(interaction_id, timestamp, message, from_bot=True)
+                
+                print(f"✅ Sent engagement prompt #{prompt_number} for {interaction_id}")
+            
+            return {'statusCode': 200, 'body': 'OK'}
+        
+        # Handle auto-resolve after timeout
+        elif event.get('auto_resolve'):
+            interaction_id = event['interaction_id']
+            timestamp = event['timestamp']
+            user_id = event['user_id']
             
             # Check if still in progress (not already resolved by user)
             response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': timestamp})
             if 'Item' in response:
                 item = response['Item']
+                # Skip if awaiting approval - those have their own 5-day timeout
+                if item.get('awaiting_approval'):
+                    print(f"⏭️ Skipping auto-resolve for {interaction_id} - awaiting approval")
+                    return {'statusCode': 200, 'body': 'OK'}
+                
                 if item.get('outcome') == 'In Progress':
-                    # Auto-resolve as self-service
-                    update_conversation(interaction_id, timestamp, "Auto-resolved (no response after 15 minutes)", from_bot=True, outcome='Self-Service Solution')
+                    # Send Slack notification
+                    channel = f"@{user_id}"
+                    message = f"⏱️ I haven't heard back from you, so I'm closing this conversation about *{item.get('description', 'your request')}*. Feel free to message me again if you still need help!"
+                    send_slack_message(channel, message)
+                    
+                    # Auto-resolve as timed out
+                    update_conversation(interaction_id, timestamp, "Auto-resolved (no response after 15 minutes)", from_bot=True, outcome='Timed Out - No Response')
                     print(f"✅ Auto-resolved {interaction_id}")
             
             return {'statusCode': 200, 'body': 'OK'}
+        
+        # Handle approval timeout check (triggered daily by EventBridge)
+        elif event.get('check_approval_timeouts'):
+            print("🔍 Checking for timed-out approval requests...")
+            
+            # Scan for conversations awaiting approval older than 5 days
+            five_days_ago = int((datetime.utcnow() - timedelta(days=5)).timestamp())
+            
+            response = interactions_table.scan(
+                FilterExpression='awaiting_approval = :true AND #ts < :timeout',
+                ExpressionAttributeNames={'#ts': 'timestamp'},
+                ExpressionAttributeValues={':true': True, ':timeout': five_days_ago}
+            )
+            
+            timed_out_approvals = response.get('Items', [])
+            print(f"Found {len(timed_out_approvals)} timed-out approval requests")
+            
+            for item in timed_out_approvals:
+                interaction_id = item['interaction_id']
+                timestamp = item['timestamp']
+                user_id = item['user_id']
+                user_name = item.get('user_name', 'Unknown User')
+                description = item.get('description', 'approval request')
+                
+                # Get user email
+                real_name, user_email = get_user_info_from_slack(user_id)
+                
+                # Create ticket for timed-out approval
+                if save_ticket_to_dynamodb(user_id, user_name, user_email, interaction_id, timestamp):
+                    print(f"✅ Created ticket for timed-out approval: {interaction_id}")
+                    
+                    # Update conversation outcome
+                    update_conversation(interaction_id, timestamp, 
+                                      "Approval timed out after 5 days - ticket created", 
+                                      from_bot=True, outcome='Escalated to Ticket')
+                    
+                    # Notify user
+                    channel = f"@{user_id}"
+                    message = f"⏱️ Your approval request for *{description}* has been pending for 5 days. I've created a ticket and escalated it to IT Support. They'll follow up with you directly."
+                    send_slack_message(channel, message)
+                else:
+                    print(f"❌ Failed to create ticket for: {interaction_id}")
+            
+            return {'statusCode': 200, 'body': f'Processed {len(timed_out_approvals)} timed-out approvals'}
         
         # Handle async processing
         elif event.get('async_processing'):
@@ -2369,6 +3271,31 @@ I've sent your request to the IT team for approval. You'll be notified once they
             # Get Claude response with Confluence knowledge and optional image analysis
             claude_response = get_claude_response(user_message, user_name, image_analysis)
             send_slack_message(channel, f"🔧 {claude_response}")
+            
+            # Upload Confluence images if relevant
+            try:
+                auth_string = f"{CONFLUENCE_EMAIL}:{CONFLUENCE_API_TOKEN}"
+                auth_b64 = base64.b64encode(auth_string.encode('ascii')).decode('ascii')
+                search_url = f"{CONFLUENCE_BASE_URL}/rest/api/content/search?cql=label=foritchatbot&limit=5"
+                req = urllib.request.Request(search_url)
+                req.add_header('Authorization', f'Basic {auth_b64}')
+                req.add_header('Accept', 'application/json')
+                with urllib.request.urlopen(req) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+                    for page in data.get('results', [])[:2]:
+                        images = get_confluence_images(page['id'])
+                        for img in images:
+                            try:
+                                req = urllib.request.Request(img['download_url'])
+                                req.add_header('Authorization', f'Basic {auth_b64}')
+                                with urllib.request.urlopen(req, timeout=5) as img_response:
+                                    if img_response.status == 200:
+                                        img_data = base64.b64encode(img_response.read()).decode('utf-8')
+                                        upload_to_slack(channel, img_data, img['title'])
+                            except:
+                                pass
+            except:
+                pass
             
             # Update conversation with bot response
             if interaction_id and timestamp:
