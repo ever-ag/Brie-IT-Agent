@@ -411,7 +411,8 @@ def handle_resolution_button(action_id, user_id, channel):
                 update_conversation(interaction_id, timestamp, "User created ticket", from_bot=False, outcome='Ticket Created')
                 send_slack_message(channel, f"✅ Ticket created with full conversation history. IT will follow up via email: {user_email}")
             else:
-                send_slack_message(channel, "❌ Error creating ticket. Please try again.")
+                update_conversation(interaction_id, timestamp, "Error creating ticket", from_bot=True, outcome='Error - Ticket Failed')
+                send_error_recovery_message(channel, "❌ Error creating ticket.", interaction_id, timestamp, user_id)
                 
     except Exception as e:
         print(f"Error handling resolution button: {e}")
@@ -2652,7 +2653,11 @@ def lambda_handler(event, context):
                             if conv_data:
                                 update_conversation(conv_data['interaction_id'], conv_data['timestamp'], message, from_bot=False, outcome='Ticket Created')
                         else:
-                            send_slack_message(channel, "🔧 ❌ Error submitting request. Please try again or call IT Support at 214-807-0784 (emergencies only).")
+                            if conv_data:
+                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], "Error submitting request", from_bot=True, outcome='Error - Submission Failed')
+                                send_error_recovery_message(channel, "🔧 ❌ Error submitting request.", conv_data['interaction_id'], conv_data['timestamp'], user_id)
+                            else:
+                                send_slack_message(channel, "🔧 ❌ Error submitting request. Please try again or call IT Support at 214-807-0784 (emergencies only).")
                         
                         # Return immediately - don't continue to Claude processing
                         return {'statusCode': 200, 'body': 'OK'}
