@@ -2389,8 +2389,12 @@ def lambda_handler(event, context):
                         # Strip Slack link formatting: <http://ever.ag|ever.ag> -> ever.ag
                         import re
                         user_selection = message.strip()
+                        print(f"DEBUG: Original message: {user_selection}")
                         user_selection = re.sub(r'<http[s]?://([^|>]+)\|([^>]+)>', r'\2', user_selection)
                         user_selection = re.sub(r'<http[s]?://([^>]+)>', r'\1', user_selection)
+                        print(f"DEBUG: After stripping links: {user_selection}")
+                        print(f"DEBUG: Looking in {len(similar_groups)} groups")
+                        print(f"DEBUG: Sample groups: {similar_groups[:3]}")
                         
                         if user_selection in similar_groups:
                             # User selected a valid group
@@ -2404,7 +2408,7 @@ def lambda_handler(event, context):
                             execution_arn = trigger_automation_workflow(
                                 user_email,
                                 user_name,
-                                f"add me to {user_selection}",
+                                f"can you add me to the {user_selection} group",
                                 pending['details']['channel'],
                                 pending['details']['thread_ts'],
                                 automation_type,
