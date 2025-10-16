@@ -130,6 +130,18 @@ def lambda_handler(event, context):
         
         # Extract approval details
         approved_by = approval_info.get('approver', 'Unknown')
+        
+        # If approver not in approval_info, try to look it up from approval record
+        if approved_by == 'Unknown' and approval_id != 'N/A':
+            try:
+                approvals_table = dynamodb.Table('it-approvals')
+                approval_response = approvals_table.get_item(Key={'approval_id': approval_id})
+                if 'Item' in approval_response:
+                    approved_by = approval_response['Item'].get('approved_by', 'Unknown')
+                    print(f"📝 Found approver from approval record: {approved_by}")
+            except Exception as e:
+                print(f"⚠️ Could not look up approver: {e}")
+        
         approved_at = approval_info.get('timestamp', int(time.time()))
         
         # PowerShell script to add/remove user from AD group
