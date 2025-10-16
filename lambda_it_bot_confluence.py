@@ -2415,29 +2415,53 @@ def lambda_handler(event, context):
                             # Delete pending selection
                             actions_table.delete_item(Key={'action_id': pending['action_id']})
                             
-                            # Re-trigger automation with exact group name
-                            automation_type = pending['details'].get('automation_type', 'SSO_GROUP')
-                            execution_arn = trigger_automation_workflow(
-                                user_email,
-                                user_name,
-                                f"can you add me to the {matched_group} group",
-                                pending['details']['channel'],
-                                pending['details']['thread_ts'],
-                                automation_type,
-                                pending['details'].get('user_id')
+                            # Bypass action processor - we already have the exact group name
+                            # Directly create approval request
+                            lambda_client = boto3.client('lambda')
+                            
+                            request_details = {
+                                'user_email': user_email,
+                                'group_name': matched_group,
+                                'action': 'add',
+                                'requester': user_email
+                            }
+                            
+                            email_data = {
+                                'sender': user_email,
+                                'subject': f'SSO Group Access Request: {matched_group}',
+                                'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
+                                'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
+                                'source': 'it-helpdesk-bot'
+                            }
+                            
+                            approval_response = lambda_client.invoke(
+                                FunctionName='it-approval-system',
+                                InvocationType='Event',
+                                Payload=json.dumps({
+                                    "action": "create_approval",
+                                    "approvalType": "SSO_GROUP",
+                                    "requester": user_email,
+                                    "ssoGroupRequest": request_details,
+                                    "emailData": email_data,
+                                    "details": f"User: {user_email}\nGroup: {matched_group}\nAction: add",
+                                    "callback_function": "brie-ad-group-manager",
+                                    "callback_params": {
+                                        "ssoGroupRequest": request_details,
+                                        "emailData": email_data
+                                    }
+                                })
                             )
                             
-                            if execution_arn and execution_arn != 'PENDING_SELECTION':
-                                # Mark conversation as awaiting approval
-                                conv_data = user_interaction_ids.get(user_id, {})
-                                if conv_data.get('interaction_id'):
-                                    mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
-                                
-                                msg = f"✅ Your {automation_type.replace('_', ' ').lower()} request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
-                                send_slack_message(channel, msg)
-                                
-                                if conv_data.get('interaction_id'):
-                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                            # Mark conversation as awaiting approval
+                            conv_data = user_interaction_ids.get(user_id, {})
+                            if conv_data.get('interaction_id'):
+                                mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                            
+                            msg = f"✅ Your SSO group request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                            send_slack_message(channel, msg)
+                            
+                            if conv_data.get('interaction_id'):
+                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                             
                             return {'statusCode': 200, 'body': 'OK'}
                         else:
