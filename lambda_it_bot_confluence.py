@@ -1216,7 +1216,7 @@ def send_error_recovery_message(channel, error_msg, interaction_id, timestamp, u
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"{error_msg}\n\nWhat would you like to do?"
+                "text": f"{error_msg}"
             }
         },
         {
@@ -1227,11 +1227,6 @@ def send_error_recovery_message(channel, error_msg, interaction_id, timestamp, u
                     "text": {"type": "plain_text", "text": "🎫 Create Ticket", "emoji": True},
                     "action_id": f"error_ticket_{interaction_id}_{timestamp}",
                     "style": "primary"
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "🔄 Start Over", "emoji": True},
-                    "action_id": f"error_retry_{interaction_id}_{timestamp}"
                 }
             ]
         }
@@ -1380,11 +1375,11 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     matches = query_group_type(cleaned)
             
             if not matches:
-                msg = f"❌ No groups found matching '{group_search}'"
+                msg = f"❌ No groups found matching '{group_search}'\n\nYou can start a new request anytime - just send me a message!\n\nIf you think this is a mistake, create a ticket and IT will help:"
                 # Log to conversation history
                 conv_data = user_interaction_ids.get(user_id, {})
                 if conv_data.get('interaction_id'):
-                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True, outcome='Error - No Match Found')
                     send_error_recovery_message(channel, msg, conv_data['interaction_id'], conv_data['timestamp'], user_id)
                 else:
                     send_slack_message(channel, msg)
