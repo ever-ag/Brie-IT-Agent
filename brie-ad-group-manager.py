@@ -137,7 +137,7 @@ def lambda_handler(event, context):
                 approvals_table = dynamodb.Table('it-approvals')
                 approval_response = approvals_table.get_item(Key={'approval_id': approval_id})
                 if 'Item' in approval_response:
-                    approved_by = approval_response['Item'].get('approved_by', 'Unknown')
+                    approved_by = approval_response['Item'].get('approver', 'Unknown')
                     print(f"📝 Found approver from approval record: {approved_by}")
             except Exception as e:
                 print(f"⚠️ Could not look up approver: {e}")
