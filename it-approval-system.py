@@ -18,7 +18,7 @@ lambda_client = boto3.client('lambda')
 sfn_client = boto3.client('stepfunctions')
 
 # Slack configuration (same as IT helpdesk bot)
-SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', 'xoxb-2265620281-9422519481827-J4pfayoqFYi9wAtWHGH2StgJ')
+SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN')
 IT_APPROVAL_CHANNEL = "C09KB40PL9J"  # IT channel ID
 
 # DynamoDB table for tracking approvals
