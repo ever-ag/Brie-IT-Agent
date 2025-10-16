@@ -2413,6 +2413,14 @@ def lambda_handler(event, context):
                                 # Distribution list approval flow
                                 lambda_client = boto3.client('lambda')
                                 
+                                email_data = {
+                                    'sender': user_email,
+                                    'subject': f'Distribution List Access Request: {matched_group}',
+                                    'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
+                                    'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
+                                    'source': 'it-helpdesk-bot'
+                                }
+                                
                                 approval_payload = {
                                     'action': 'create_approval',
                                     'request_type': 'Distribution List Access',
@@ -2422,7 +2430,8 @@ def lambda_handler(event, context):
                                     'callback_params': {
                                         'action': 'add_user_to_group',
                                         'user_email': user_email,
-                                        'group_name': matched_group
+                                        'group_name': matched_group,
+                                        'emailData': email_data
                                     },
                                     'urgency': 'normal'
                                 }
