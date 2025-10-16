@@ -1387,7 +1387,16 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             
             if len(matches) > 1:
                 # Multiple matches - ask user to select
-                group_list = "\n".join([f"• {g['name']}" for g in matches])
+                # Group by type for clearer display
+                sso_groups = [g for g in matches if g.get('type') == 'SSO_GROUP']
+                dl_groups = [g for g in matches if g.get('type') == 'DISTRIBUTION_LIST']
+                
+                group_list = ""
+                if sso_groups:
+                    group_list += "**SSO Groups:**\n" + "\n".join([f"• {g['name']}" for g in sso_groups]) + "\n\n"
+                if dl_groups:
+                    group_list += "**Distribution Lists:**\n" + "\n".join([f"• {g['name']}" for g in dl_groups])
+                
                 msg = f"🔍 Found multiple groups matching '{group_search}':\n\n{group_list}\n\nPlease reply with the exact group name you want."
                 send_slack_message(channel, msg)
                 
@@ -1405,7 +1414,7 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     'timestamp': int(datetime.now().timestamp()),
                     'pending_selection': True,
                     'details': {
-                        'similar_groups': [g['name'] for g in matches],
+                        'similar_groups': [{'name': g['name'], 'type': g['type']} for g in matches],
                         'action': action,
                         'channel': channel,
                         'thread_ts': thread_ts,
@@ -2380,17 +2389,17 @@ def lambda_handler(event, context):
                         
                         # Try exact match first
                         matched_group = None
-                        if user_selection in similar_groups:
-                            matched_group = user_selection
-                        else:
-                            # Try case-insensitive match
-                            user_lower = user_selection.lower()
-                            for group in similar_groups:
-                                if group.lower() == user_lower:
-                                    matched_group = group
-                                    break
+                        group_type = None
                         
-                        print(f"DEBUG: Matched group: {matched_group}")
+                        # Handle both old format (strings) and new format (dicts with type)
+                        for group in similar_groups:
+                            group_name = group['name'] if isinstance(group, dict) else group
+                            if user_selection == group_name or user_selection.lower() == group_name.lower():
+                                matched_group = group_name
+                                group_type = group.get('type', 'SSO_GROUP') if isinstance(group, dict) else 'SSO_GROUP'
+                                break
+                        
+                        print(f"DEBUG: Matched group: {matched_group}, Type: {group_type}")
                         
                         if matched_group:
                             # User selected a valid group
@@ -2399,6 +2408,39 @@ def lambda_handler(event, context):
                             # Delete pending selection
                             actions_table.delete_item(Key={'action_id': pending['action_id']})
                             
+                            # Route to correct flow based on group type
+                            if group_type == 'DISTRIBUTION_LIST':
+                                # Distribution list flow
+                                lambda_client = boto3.client('lambda')
+                                
+                                payload = {
+                                    'action': 'add_user_to_group',
+                                    'user_email': user_email,
+                                    'group_name': matched_group
+                                }
+                                
+                                response = lambda_client.invoke(
+                                    FunctionName='brie-infrastructure-connector',
+                                    InvocationType='RequestResponse',
+                                    Payload=json.dumps(payload)
+                                )
+                                
+                                result = json.loads(response['Payload'].read())
+                                if result.get('statusCode') == 200:
+                                    body = json.loads(result.get('body', '{}'))
+                                    if body.get('success'):
+                                        send_slack_message(channel, f"✅ {body.get('message', 'Added successfully')}")
+                                        update_conversation(interaction_id, timestamp, f"Added to {matched_group}", from_bot=True, outcome='Resolved by Brie')
+                                    else:
+                                        send_slack_message(channel, f"❌ {body.get('message', 'Failed to add')}")
+                                        update_conversation(interaction_id, timestamp, f"Failed: {body.get('message')}", from_bot=True, outcome='Resolved - Failed')
+                                else:
+                                    send_slack_message(channel, f"❌ Error processing request")
+                                    update_conversation(interaction_id, timestamp, "Error processing request", from_bot=True, outcome='Resolved - Failed')
+                                
+                                return {'statusCode': 200, 'body': 'OK'}
+                            
+                            # SSO Group flow (existing code)
                             # Bypass action processor - we already have the exact group name
                             # Directly create approval request
                             lambda_client = boto3.client('lambda')
@@ -3009,7 +3051,7 @@ Need help with the form? Just ask!"""
                                 'timestamp': int(datetime.now().timestamp()),
                                 'pending_selection': True,
                                 'details': {
-                                    'similar_groups': [g['name'] for g in dl_matches],
+                                    'similar_groups': [{'name': g['name'], 'type': g.get('type', 'DISTRIBUTION_LIST')} for g in dl_matches],
                                     'action': 'add',
                                     'channel': channel,
                                     'thread_ts': slack_event.get('ts', ''),
