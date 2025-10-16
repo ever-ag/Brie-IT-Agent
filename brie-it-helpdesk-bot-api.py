@@ -34,6 +34,8 @@ def lambda_handler(event, context):
             return get_interactions(event, headers)
         elif path == '/stats':
             return get_stats(headers)
+        elif path == '/close-conversation':
+            return close_conversation(event, headers)
         else:
             return {
                 'statusCode': 404,
@@ -124,3 +126,35 @@ def get_stats(headers):
         'headers': headers,
         'body': json.dumps(stats, cls=DecimalEncoder)
     }
+
+def close_conversation(event, headers):
+    """Close a conversation by updating its outcome"""
+    try:
+        body = json.loads(event.get('body', '{}'))
+        interaction_id = body.get('interaction_id')
+        timestamp = body.get('timestamp')
+        
+        if not interaction_id or not timestamp:
+            return {
+                'statusCode': 400,
+                'headers': headers,
+                'body': json.dumps({'error': 'Missing interaction_id or timestamp'})
+            }
+        
+        table.update_item(
+            Key={'interaction_id': interaction_id, 'timestamp': timestamp},
+            UpdateExpression='SET outcome = :outcome',
+            ExpressionAttributeValues={':outcome': 'Cancelled - Manual Close'}
+        )
+        
+        return {
+            'statusCode': 200,
+            'headers': headers,
+            'body': json.dumps({'success': True})
+        }
+    except Exception as e:
+        return {
+            'statusCode': 500,
+            'headers': headers,
+            'body': json.dumps({'error': str(e)})
+        }
