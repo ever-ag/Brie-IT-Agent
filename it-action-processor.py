@@ -1687,8 +1687,10 @@ def extract_distribution_list_request(subject, body, sender):
     return None
 
 def extract_sso_group_request(subject, body, sender):
-    """Extract SSO/AD group request details"""
+    """Extract SSO/AD group request details using Claude AI"""
     import re
+    import boto3
+    import json
     
     # Strip HTML and Slack markdown
     if '<html>' in body.lower():
@@ -1715,6 +1717,59 @@ def extract_sso_group_request(subject, body, sender):
     if 'sso' not in desc_lower and 'active directory' not in desc_lower and 'ad group' not in desc_lower:
         return None
     
+    # Use Claude AI to extract group name
+    try:
+        bedrock = boto3.client('bedrock-runtime')
+        
+        prompt = f"""Extract the SSO group name from this user request. Return ONLY the group name, nothing else.
+
+User request: "{desc}"
+
+Examples:
+- "add me to the sso aws ever.ag infra sandbox admin group" → "aws ever.ag infra sandbox admin"
+- "can you add me to SSO AWS Corp Admin" → "AWS Corp Admin"  
+- "need access to the sso cainthus production admin group" → "cainthus production admin"
+
+Group name:"""
+
+        response = bedrock.invoke_model(
+            modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": prompt}]
+            })
+        )
+        
+        result = json.loads(response['body'].read())
+        group_name = result['content'][0]['text'].strip()
+        print(f"   Claude extracted group name: {group_name}")
+        
+    except Exception as e:
+        print(f"   Claude extraction failed: {e}, falling back to regex")
+        # Fallback to regex if Claude fails
+        group_patterns = [
+            r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?sso\s+([A-Za-z0-9\s\-_.]+?)(?:\s+group|\s*$)',
+            r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?([A-Za-z0-9\s\-_.]+\s+sso\s+[A-Za-z0-9\s\-_.]+?)(?:\s+group|\s*$)',
+            r'([A-Za-z0-9\s\-_.]+\s+sso\s+[A-Za-z0-9\s\-_.]+?)\s+(?:group|access|provisioning|setup|login|authentication)',
+            r'(?:requesting|need|enable|grant|provision)\s+([A-Za-z0-9\s\-_.]+\s+sso)',
+            r'([A-Za-z0-9\s\-_.]+)\s+sso\s+(?:isn\'t|not|issues|waiting)'
+        ]
+        
+        group_name = None
+        for pattern in group_patterns:
+            match = re.search(pattern, desc, re.IGNORECASE)
+            if match:
+                group_name = match.group(1).strip()
+                # Remove common articles from the beginning
+                group_name = re.sub(r'^(the|a|an)\s+', '', group_name, flags=re.IGNORECASE).strip()
+                # Remove common suffixes
+                group_name = re.sub(r'\s+(group|access|provisioning|setup|login|authentication|account)$', '', group_name, flags=re.IGNORECASE).strip()
+                break
+    
+    if not group_name:
+        return None
+    
     # Determine action (add or remove)
     action = 'add'
     if any(word in desc_lower for word in ['remove', 'revoke', 'delete']):
@@ -1726,32 +1781,6 @@ def extract_sso_group_request(subject, body, sender):
     # Clean up Slack mailto formatting (e.g., "email@domain.com|name" -> "email@domain.com")
     emails = [email.split('|')[0] for email in emails]
     user_email = emails[0] if emails else sender
-    
-    # Normalize "single sign-on" to "sso"
-    desc = re.sub(r'\bsingle\s+sign-on\b', 'sso', desc, flags=re.IGNORECASE)
-    
-    # Extract group name - look for patterns with "SSO"
-    group_patterns = [
-        r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?sso\s+([A-Za-z0-9\s\-_.]+?)(?:\s+group|\s*$)',
-        r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?([A-Za-z0-9\s\-_.]+\s+sso\s+[A-Za-z0-9\s\-_.]+?)(?:\s+group|\s*$)',
-        r'([A-Za-z0-9\s\-_.]+\s+sso\s+[A-Za-z0-9\s\-_.]+?)\s+(?:group|access|provisioning|setup|login|authentication)',
-        r'(?:requesting|need|enable|grant|provision)\s+([A-Za-z0-9\s\-_.]+\s+sso)',
-        r'([A-Za-z0-9\s\-_.]+)\s+sso\s+(?:isn\'t|not|issues|waiting)'
-    ]
-    
-    group_name = None
-    for pattern in group_patterns:
-        match = re.search(pattern, desc, re.IGNORECASE)
-        if match:
-            group_name = match.group(1).strip()
-            # Remove common articles from the beginning
-            group_name = re.sub(r'^(the|a|an)\s+', '', group_name, flags=re.IGNORECASE).strip()
-            # Remove common suffixes
-            group_name = re.sub(r'\s+(group|access|provisioning|setup|login|authentication|account)$', '', group_name, flags=re.IGNORECASE).strip()
-            break
-    
-    if not group_name:
-        return None
     
     return {
         'user_email': user_email,
