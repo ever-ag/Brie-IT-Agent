@@ -2410,33 +2410,45 @@ def lambda_handler(event, context):
                             
                             # Route to correct flow based on group type
                             if group_type == 'DISTRIBUTION_LIST':
-                                # Distribution list flow
+                                # Distribution list approval flow
                                 lambda_client = boto3.client('lambda')
                                 
-                                payload = {
-                                    'action': 'add_user_to_group',
-                                    'user_email': user_email,
-                                    'group_name': matched_group
+                                approval_payload = {
+                                    'action': 'create_approval',
+                                    'request_type': 'Distribution List Access',
+                                    'details': f"User: {user_email}\nDistribution List: {matched_group}\nAction: Add",
+                                    'requester': user_email,
+                                    'callback_function': 'brie-infrastructure-connector',
+                                    'callback_params': {
+                                        'action': 'add_user_to_group',
+                                        'user_email': user_email,
+                                        'group_name': matched_group
+                                    },
+                                    'urgency': 'normal'
                                 }
                                 
                                 response = lambda_client.invoke(
-                                    FunctionName='brie-infrastructure-connector',
+                                    FunctionName='it-approval-system',
                                     InvocationType='RequestResponse',
-                                    Payload=json.dumps(payload)
+                                    Payload=json.dumps(approval_payload)
                                 )
                                 
                                 result = json.loads(response['Payload'].read())
                                 if result.get('statusCode') == 200:
-                                    body = json.loads(result.get('body', '{}'))
-                                    if body.get('success'):
-                                        send_slack_message(channel, f"✅ {body.get('message', 'Added successfully')}")
-                                        update_conversation(interaction_id, timestamp, f"Added to {matched_group}", from_bot=True, outcome='Resolved by Brie')
-                                    else:
-                                        send_slack_message(channel, f"❌ {body.get('message', 'Failed to add')}")
-                                        update_conversation(interaction_id, timestamp, f"Failed: {body.get('message')}", from_bot=True, outcome='Resolved - Failed')
+                                    send_slack_message(channel, "✅ Your distribution list request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!")
+                                    update_conversation(interaction_id, timestamp, f"Awaiting approval for {matched_group}", from_bot=True, outcome='Awaiting Approval')
                                 else:
-                                    send_slack_message(channel, f"❌ Error processing request")
-                                    update_conversation(interaction_id, timestamp, "Error processing request", from_bot=True, outcome='Resolved - Failed')
+                                    send_slack_message(channel, f"❌ Error creating approval request")
+                                    update_conversation(interaction_id, timestamp, "Error creating approval", from_bot=True, outcome='Resolved - Failed')
+                                
+                                # Track SSO interaction for callback
+                                actions_table.put_item(Item={
+                                    'action_id': f"sso_interaction_{interaction_id}_{timestamp}",
+                                    'action_type': 'sso_interaction_tracking',
+                                    'interaction_id': interaction_id,
+                                    'timestamp': timestamp,
+                                    'channel': channel
+                                })
                                 
                                 return {'statusCode': 200, 'body': 'OK'}
                             
