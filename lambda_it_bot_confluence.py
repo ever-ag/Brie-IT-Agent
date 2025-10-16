@@ -2386,7 +2386,12 @@ def lambda_handler(event, context):
                         similar_groups = pending['details']['similar_groups']
                         
                         # Check if user's message matches one of the groups
+                        # Strip Slack link formatting: <http://ever.ag|ever.ag> -> ever.ag
+                        import re
                         user_selection = message.strip()
+                        user_selection = re.sub(r'<http[s]?://([^|>]+)\|([^>]+)>', r'\2', user_selection)
+                        user_selection = re.sub(r'<http[s]?://([^>]+)>', r'\1', user_selection)
+                        
                         if user_selection in similar_groups:
                             # User selected a valid group
                             send_slack_message(channel, f"✅ Got it! Processing your request for **{user_selection}**...")
