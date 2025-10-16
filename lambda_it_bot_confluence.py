@@ -2410,54 +2410,26 @@ def lambda_handler(event, context):
                             
                             # Route to correct flow based on group type
                             if group_type == 'DISTRIBUTION_LIST':
-                                # Distribution list approval flow
-                                lambda_client = boto3.client('lambda')
+                                # Route to distribution list handler - let it handle approval
+                                # Just trigger the automation workflow with the exact group name
+                                automation_type = pending['details'].get('automation_type', 'distribution_list')
+                                action = pending['details'].get('action', 'add')
                                 
-                                email_data = {
-                                    'sender': user_email,
-                                    'subject': f'Distribution List Access Request: {matched_group}',
-                                    'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
-                                    'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
-                                    'source': 'it-helpdesk-bot'
-                                }
-                                
-                                approval_payload = {
-                                    'action': 'create_approval',
-                                    'request_type': 'Distribution List Access',
-                                    'details': f"User: {user_email}\nDistribution List: {matched_group}\nAction: Add",
-                                    'requester': user_email,
-                                    'callback_function': 'brie-infrastructure-connector',
-                                    'callback_params': {
-                                        'action': 'add_user_to_group',
-                                        'user_email': user_email,
-                                        'group_name': matched_group,
-                                        'emailData': email_data
-                                    },
-                                    'urgency': 'normal'
-                                }
-                                
-                                response = lambda_client.invoke(
-                                    FunctionName='it-approval-system',
-                                    InvocationType='RequestResponse',
-                                    Payload=json.dumps(approval_payload)
+                                execution_arn = trigger_automation_workflow(
+                                    user_email=user_email,
+                                    automation_type=automation_type,
+                                    action=action,
+                                    group_name=matched_group,
+                                    channel=channel,
+                                    thread_ts=pending['details'].get('thread_ts', '')
                                 )
                                 
-                                result = json.loads(response['Payload'].read())
-                                if result.get('statusCode') == 200:
-                                    send_slack_message(channel, "✅ Your distribution list request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!")
+                                if execution_arn and execution_arn != 'PENDING_SELECTION':
+                                    send_slack_message(channel, f"✅ Your distribution list request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!")
                                     update_conversation(interaction_id, timestamp, f"Awaiting approval for {matched_group}", from_bot=True, outcome='Awaiting Approval')
                                 else:
-                                    send_slack_message(channel, f"❌ Error creating approval request")
-                                    update_conversation(interaction_id, timestamp, "Error creating approval", from_bot=True, outcome='Resolved - Failed')
-                                
-                                # Track SSO interaction for callback
-                                actions_table.put_item(Item={
-                                    'action_id': f"sso_interaction_{interaction_id}_{timestamp}",
-                                    'action_type': 'sso_interaction_tracking',
-                                    'interaction_id': interaction_id,
-                                    'timestamp': timestamp,
-                                    'channel': channel
-                                })
+                                    send_slack_message(channel, f"❌ Error processing request")
+                                    update_conversation(interaction_id, timestamp, "Error processing request", from_bot=True, outcome='Resolved - Failed')
                                 
                                 return {'statusCode': 200, 'body': 'OK'}
                             
