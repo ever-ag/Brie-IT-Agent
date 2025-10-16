@@ -1424,10 +1424,12 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                         'similar_groups': [g['name'] for g in matches],
                         'action': action,
                         'channel': channel,
-                        'thread_ts': thread_ts
+                        'thread_ts': thread_ts,
+                        'user_id': user_id,
+                        'automation_type': automation_type
                     }
                 })
-                return True
+                return 'PENDING_SELECTION'
             
             # Single match - use exact group name
             exact_group = matches[0]['name']
@@ -2371,6 +2373,57 @@ def lambda_handler(event, context):
                     # Send immediate acknowledgment
                     send_slack_message(channel, "🔍 Checking your request...")
                     
+                    # Check if user has pending group selection
+                    actions_table = dynamodb.Table('it-actions')
+                    pending_items = actions_table.scan(
+                        FilterExpression='requester = :email AND #status = :status',
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={':email': user_email, ':status': 'PENDING_SELECTION'}
+                    ).get('Items', [])
+                    
+                    if pending_items:
+                        pending = pending_items[0]
+                        similar_groups = pending['details']['similar_groups']
+                        
+                        # Check if user's message matches one of the groups
+                        user_selection = message.strip()
+                        if user_selection in similar_groups:
+                            # User selected a valid group
+                            send_slack_message(channel, f"✅ Got it! Processing your request for **{user_selection}**...")
+                            
+                            # Delete pending selection
+                            actions_table.delete_item(Key={'action_id': pending['action_id']})
+                            
+                            # Re-trigger automation with exact group name
+                            automation_type = pending['details'].get('automation_type', 'SSO_GROUP')
+                            execution_arn = trigger_automation_workflow(
+                                user_email,
+                                user_name,
+                                f"add me to {user_selection}",
+                                pending['details']['channel'],
+                                pending['details']['thread_ts'],
+                                automation_type,
+                                pending['details'].get('user_id')
+                            )
+                            
+                            if execution_arn and execution_arn != 'PENDING_SELECTION':
+                                # Mark conversation as awaiting approval
+                                conv_data = user_interaction_ids.get(user_id, {})
+                                if conv_data.get('interaction_id'):
+                                    mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                
+                                msg = f"✅ Your {automation_type.replace('_', ' ').lower()} request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                                send_slack_message(channel, msg)
+                                
+                                if conv_data.get('interaction_id'):
+                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                            
+                            return {'statusCode': 200, 'body': 'OK'}
+                        else:
+                            # Invalid selection
+                            send_slack_message(channel, f"❌ '{user_selection}' doesn't match any of the groups I showed you. Please reply with the exact group name from the list.")
+                            return {'statusCode': 200, 'body': 'OK'}
+                    
                     # Track conversation
                     interaction_id, timestamp, is_new, resumption_conv = get_or_create_conversation(user_id, user_name, message)
                     
@@ -2738,7 +2791,11 @@ Need help with the form? Just ask!"""
                             user_id
                         )
                         
-                        if execution_arn:
+                        if execution_arn == 'PENDING_SELECTION':
+                            # User needs to select from multiple groups - don't mark as awaiting approval yet
+                            print(f"⏳ Waiting for user to select from multiple groups")
+                            return {'statusCode': 200, 'body': 'OK'}
+                        elif execution_arn:
                             # Mark conversation as awaiting approval
                             conv_data = user_interaction_ids.get(user_id, {})
                             if conv_data.get('interaction_id'):
