@@ -1403,9 +1403,8 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             
             if len(matches) > 1:
                 # Multiple matches - ask user to select
-                # Use backticks to prevent Slack from linkifying group names
-                group_list = "\n".join([f"• `{g['name']}`" for g in matches])
-                msg = f"🔍 Found multiple groups matching '{group_search}':\n\n{group_list}\n\nPlease reply with the exact group name you want (copy without the backticks)."
+                group_list = "\n".join([f"• {g['name']}" for g in matches])
+                msg = f"🔍 Found multiple groups matching '{group_search}':\n\n{group_list}\n\nPlease reply with the exact group name you want."
                 send_slack_message(channel, msg)
                 
                 # Log to conversation history
@@ -2394,12 +2393,24 @@ def lambda_handler(event, context):
                         user_selection = re.sub(r'<http[s]?://([^|>]+)\|([^>]+)>', r'\2', user_selection)
                         user_selection = re.sub(r'<http[s]?://([^>]+)>', r'\1', user_selection)
                         print(f"DEBUG: After stripping links: {user_selection}")
-                        print(f"DEBUG: Looking in {len(similar_groups)} groups")
-                        print(f"DEBUG: Sample groups: {similar_groups[:3]}")
                         
+                        # Try exact match first
+                        matched_group = None
                         if user_selection in similar_groups:
+                            matched_group = user_selection
+                        else:
+                            # Try case-insensitive match
+                            user_lower = user_selection.lower()
+                            for group in similar_groups:
+                                if group.lower() == user_lower:
+                                    matched_group = group
+                                    break
+                        
+                        print(f"DEBUG: Matched group: {matched_group}")
+                        
+                        if matched_group:
                             # User selected a valid group
-                            send_slack_message(channel, f"✅ Got it! Processing your request for **{user_selection}**...")
+                            send_slack_message(channel, f"✅ Got it! Processing your request for **{matched_group}**...")
                             
                             # Delete pending selection
                             actions_table.delete_item(Key={'action_id': pending['action_id']})
@@ -2409,7 +2420,7 @@ def lambda_handler(event, context):
                             execution_arn = trigger_automation_workflow(
                                 user_email,
                                 user_name,
-                                f"can you add me to the {user_selection} group",
+                                f"can you add me to the {matched_group} group",
                                 pending['details']['channel'],
                                 pending['details']['thread_ts'],
                                 automation_type,
