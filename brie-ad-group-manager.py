@@ -320,11 +320,22 @@ try {{
                         if 'Item' in response:
                             item = response['Item']
                             history = json.loads(item.get('conversation_history', '[]'))
+                            
+                            # Add approval message to history
+                            approval_message = f"✅ {approved_by} approved this request"
+                            history.append({
+                                'timestamp': datetime.utcnow().isoformat(),
+                                'message': approval_message,
+                                'from': 'system'
+                            })
+                            
+                            # Add completion message to history
                             history.append({
                                 'timestamp': datetime.utcnow().isoformat(),
                                 'message': user_message,
                                 'from': 'bot'
                             })
+                            
                             interactions_table.update_item(
                                 Key={'interaction_id': interaction_id, 'timestamp': interaction_timestamp},
                                 UpdateExpression='SET conversation_history = :history',
