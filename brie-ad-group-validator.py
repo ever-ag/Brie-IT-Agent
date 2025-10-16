@@ -139,8 +139,9 @@ Write-Output "END"
         command_id = response['Command']['CommandId']
         
         import time
-        # Wait for command to complete (up to 20 seconds for Exchange connection)
-        for i in range(10):
+        # Wait for command to complete (up to 30 seconds for Exchange connection)
+        status = 'InProgress'
+        for i in range(15):
             time.sleep(2)
             output_response = ssm.get_command_invocation(
                 CommandId=command_id,
@@ -153,12 +154,16 @@ Write-Output "END"
         output = output_response['StandardOutputContent'].strip()
         error_output = output_response.get('StandardErrorContent', '').strip()
         print(f"SSM Command Status: {status}")
-        print(f"Group type check output: {output}")
+        print(f"Group type check output length: {len(output)} chars")
         if error_output:
             print(f"Group type check errors: {error_output}")
         
+        if status not in ['Success', 'Failed']:
+            print(f"PowerShell script timed out after 30 seconds, status: {status}")
+            return None
+        
         if not output or "END" not in output:
-            print("PowerShell script did not complete successfully")
+            print(f"PowerShell script did not complete successfully. Output: {output[:500]}")
             return None
         
         # Parse results

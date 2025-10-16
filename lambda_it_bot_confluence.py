@@ -973,17 +973,21 @@ def handle_approval_response(action_id, user_id):
             })
             
             # Notify IT channel
+            approver_name, _ = get_user_info_from_slack(user_id)
+            approver_text = f" by {approver_name}" if approver_name else ""
             send_slack_message_to_channel({
                 "channel": IT_APPROVAL_CHANNEL,
-                "text": f"✅ Approved: {approval_data['user_name']} → `{approval_data['distribution_list']}`"
+                "text": f"✅ Approved{approver_text}: {approval_data['user_name']} → `{approval_data['distribution_list']}`"
             })
             
             # Update conversation outcome if tracked
             if approval_data.get('interaction_id') and approval_data.get('interaction_timestamp'):
+                approver_name, _ = get_user_info_from_slack(user_id)
+                approver_text = f" by {approver_name}" if approver_name else ""
                 update_conversation(
                     approval_data['interaction_id'],
                     approval_data['interaction_timestamp'],
-                    f"DL request approved: {approval_data['distribution_list']}",
+                    f"DL request approved{approver_text}: {approval_data['distribution_list']}",
                     from_bot=True,
                     outcome='Resolved by Brie'
                 )
@@ -1387,16 +1391,7 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             
             if len(matches) > 1:
                 # Multiple matches - ask user to select
-                # Group by type for clearer display
-                sso_groups = [g for g in matches if g.get('type') == 'SSO_GROUP']
-                dl_groups = [g for g in matches if g.get('type') == 'DISTRIBUTION_LIST']
-                
-                group_list = ""
-                if sso_groups:
-                    group_list += "**SSO Groups:**\n" + "\n".join([f"• {g['name']}" for g in sso_groups]) + "\n\n"
-                if dl_groups:
-                    group_list += "**Distribution Lists:**\n" + "\n".join([f"• {g['name']}" for g in dl_groups])
-                
+                group_list = "\n".join([f"• {g['name']}" for g in matches])
                 msg = f"🔍 Found multiple groups matching '{group_search}':\n\n{group_list}\n\nPlease reply with the exact group name you want."
                 send_slack_message(channel, msg)
                 
@@ -1414,7 +1409,7 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     'timestamp': int(datetime.now().timestamp()),
                     'pending_selection': True,
                     'details': {
-                        'similar_groups': [{'name': g['name'], 'type': g['type']} for g in matches],
+                        'similar_groups': [g['name'] for g in matches],
                         'action': action,
                         'channel': channel,
                         'thread_ts': thread_ts,
@@ -2389,17 +2384,17 @@ def lambda_handler(event, context):
                         
                         # Try exact match first
                         matched_group = None
-                        group_type = None
+                        if user_selection in similar_groups:
+                            matched_group = user_selection
+                        else:
+                            # Try case-insensitive match
+                            user_lower = user_selection.lower()
+                            for group in similar_groups:
+                                if group.lower() == user_lower:
+                                    matched_group = group
+                                    break
                         
-                        # Handle both old format (strings) and new format (dicts with type)
-                        for group in similar_groups:
-                            group_name = group['name'] if isinstance(group, dict) else group
-                            if user_selection == group_name or user_selection.lower() == group_name.lower():
-                                matched_group = group_name
-                                group_type = group.get('type', 'SSO_GROUP') if isinstance(group, dict) else 'SSO_GROUP'
-                                break
-                        
-                        print(f"DEBUG: Matched group: {matched_group}, Type: {group_type}")
+                        print(f"DEBUG: Matched group: {matched_group}")
                         
                         if matched_group:
                             # User selected a valid group
@@ -2408,34 +2403,26 @@ def lambda_handler(event, context):
                             # Delete pending selection
                             actions_table.delete_item(Key={'action_id': pending['action_id']})
                             
-                            # Route to correct flow based on group type
-                            if group_type == 'DISTRIBUTION_LIST':
-                                # Route to distribution list handler - let it handle approval
-                                # Just trigger the automation workflow with the exact group name
-                                automation_type = pending['details'].get('automation_type', 'distribution_list')
-                                action = pending['details'].get('action', 'add')
+                            # Check request type
+                            request_type = pending['details'].get('type', 'SSO_GROUP')
+                            
+                            if request_type == 'DISTRIBUTION_LIST':
+                                # Handle DL request
+                                conv_data = user_interaction_ids.get(user_id, {})
+                                approval_id = send_approval_request(user_id, user_name, user_email, matched_group, f"add me to {matched_group}", conv_data)
                                 
-                                execution_arn = trigger_automation_workflow(
-                                    user_email=user_email,
-                                    automation_type=automation_type,
-                                    action=action,
-                                    group_name=matched_group,
-                                    channel=channel,
-                                    thread_ts=pending['details'].get('thread_ts', '')
-                                )
+                                if conv_data.get('interaction_id'):
+                                    mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
                                 
-                                if execution_arn and execution_arn != 'PENDING_SELECTION':
-                                    send_slack_message(channel, f"✅ Your distribution list request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!")
-                                    update_conversation(interaction_id, timestamp, f"Awaiting approval for {matched_group}", from_bot=True, outcome='Awaiting Approval')
-                                else:
-                                    send_slack_message(channel, f"❌ Error processing request")
-                                    update_conversation(interaction_id, timestamp, "Error processing request", from_bot=True, outcome='Resolved - Failed')
+                                msg = f"✅ Your request for **{matched_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                                send_slack_message(channel, msg)
+                                
+                                if conv_data.get('interaction_id'):
+                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                                 
                                 return {'statusCode': 200, 'body': 'OK'}
                             
-                            # SSO Group flow (existing code)
-                            # Bypass action processor - we already have the exact group name
-                            # Directly create approval request
+                            # Handle SSO group request
                             lambda_client = boto3.client('lambda')
                             
                             request_details = {
@@ -3044,7 +3031,7 @@ Need help with the form? Just ask!"""
                                 'timestamp': int(datetime.now().timestamp()),
                                 'pending_selection': True,
                                 'details': {
-                                    'similar_groups': [{'name': g['name'], 'type': g.get('type', 'DISTRIBUTION_LIST')} for g in dl_matches],
+                                    'similar_groups': [g['name'] for g in dl_matches],
                                     'action': 'add',
                                     'channel': channel,
                                     'thread_ts': slack_event.get('ts', ''),
