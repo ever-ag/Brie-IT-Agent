@@ -470,13 +470,17 @@
                 else if (item.outcome === 'Ticket Created') badgeClass = 'badge-warning';
                 else if (item.outcome === 'In Progress') badgeClass = 'badge-progress';
                 
+                const closeBtn = (item.outcome === 'In Progress' || item.outcome === 'Awaiting Approval') 
+                    ? `<button onclick="event.stopPropagation(); closeConversation('${item.interaction_id}', ${item.timestamp})" style="padding: 5px 10px; background: #dc3545; color: white; border: none; border-radius: 5px; cursor: pointer;">Close</button>` 
+                    : '';
+                
                 return `
                     <tr onclick='showConversation(${JSON.stringify(item).replace(/'/g, "&#39;")})'>
                         <td>${date}</td>
                         <td>${item.user_name}</td>
                         <td>${item.interaction_type}</td>
                         <td>${item.description}</td>
-                        <td><span class="badge ${badgeClass}">${item.outcome}</span></td>
+                        <td><span class="badge ${badgeClass}">${item.outcome}</span> ${closeBtn}</td>
                     </tr>
                 `;
             }).join('');
@@ -571,6 +575,28 @@
         
         function closeModal() {
             document.getElementById('conversationModal').style.display = 'none';
+        }
+        
+        async function closeConversation(interactionId, timestamp) {
+            if (!confirm('Close this conversation?')) return;
+            
+            try {
+                const response = await fetch(`${API_URL}/close-conversation`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({interaction_id: interactionId, timestamp: timestamp})
+                });
+                
+                if (response.ok) {
+                    alert('Conversation closed');
+                    loadData();
+                } else {
+                    alert('Failed to close conversation');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error closing conversation');
+            }
         }
         
         window.onclick = function(event) {
