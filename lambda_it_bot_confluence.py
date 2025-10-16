@@ -2456,6 +2456,20 @@ def lambda_handler(event, context):
                             conv_data = user_interaction_ids.get(user_id, {})
                             if conv_data.get('interaction_id'):
                                 mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                
+                                # Create SSO interaction tracking for callback
+                                print(f"📝 Creating SSO interaction tracking for {conv_data['interaction_id']}")
+                                tracking_id = f"sso_tracking_{user_id}_{int(datetime.utcnow().timestamp())}"
+                                actions_table.put_item(Item={
+                                    'action_id': tracking_id,
+                                    'action_type': 'sso_interaction_tracking',
+                                    'interaction_id': conv_data['interaction_id'],
+                                    'interaction_timestamp': conv_data['timestamp'],
+                                    'user_email': user_email,
+                                    'group_name': matched_group,
+                                    'timestamp': int(datetime.utcnow().timestamp())
+                                })
+                                print(f"✅ Created tracking record: {tracking_id}")
                             
                             msg = f"✅ Your SSO group request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                             send_slack_message(channel, msg)
