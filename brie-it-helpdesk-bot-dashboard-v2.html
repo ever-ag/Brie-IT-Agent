@@ -280,10 +280,11 @@
                             <th>Type</th>
                             <th>Description</th>
                             <th>Outcome</th>
+                            <th>Schedule</th>
                         </tr>
                     </thead>
                     <tbody id="tableBody">
-                        <tr><td colspan="5" style="text-align: center;">Loading...</td></tr>
+                        <tr><td colspan="6" style="text-align: center;">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -445,10 +446,41 @@
             });
         }
         
+        function getScheduleInfo(item) {
+            // Only show schedule info for In Progress conversations
+            if (item.outcome !== 'In Progress') {
+                return '<span style="color: #999;">-</span>';
+            }
+            
+            // Check if we have schedule data (this would need to be fetched from AWS)
+            // For now, show a placeholder that indicates schedules exist
+            const timestamp = item.timestamp;
+            const now = new Date();
+            const conversationTime = new Date(timestamp * 1000);
+            const minutesElapsed = Math.floor((now - conversationTime) / (1000 * 60));
+            
+            // Estimate next engagement based on elapsed time
+            let nextEvent = '';
+            if (minutesElapsed < 5) {
+                const remaining = 5 - minutesElapsed;
+                nextEvent = `5min in ${remaining}m`;
+            } else if (minutesElapsed < 10) {
+                const remaining = 10 - minutesElapsed;
+                nextEvent = `10min in ${remaining}m`;
+            } else if (minutesElapsed < 15) {
+                const remaining = 15 - minutesElapsed;
+                nextEvent = `Auto-resolve in ${remaining}m`;
+            } else {
+                nextEvent = 'Should be resolved';
+            }
+            
+            return `<span style="font-size: 12px; color: #667eea;">${nextEvent}</span>`;
+        }
+        
         function displayInteractions(interactions) {
             const tbody = document.getElementById('tableBody');
             if (interactions.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No interactions found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">No interactions found</td></tr>';
                 document.getElementById('pagination').style.display = 'none';
                 return;
             }
@@ -474,6 +506,8 @@
                     ? `<button onclick="event.stopPropagation(); closeConversation('${item.interaction_id}', ${item.timestamp})" style="padding: 5px 10px; background: #dc3545; color: white; border: none; border-radius: 5px; cursor: pointer;">Close</button>` 
                     : '';
                 
+                const scheduleInfo = getScheduleInfo(item);
+                
                 return `
                     <tr onclick='showConversation(${JSON.stringify(item).replace(/'/g, "&#39;")})'>
                         <td>${date}</td>
@@ -481,6 +515,7 @@
                         <td>${item.interaction_type}</td>
                         <td>${item.description}</td>
                         <td><span class="badge ${badgeClass}">${item.outcome}</span> ${closeBtn}</td>
+                        <td>${scheduleInfo}</td>
                     </tr>
                 `;
             }).join('');
