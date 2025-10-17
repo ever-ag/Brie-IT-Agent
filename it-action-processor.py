@@ -1722,13 +1722,15 @@ def extract_sso_group_request(subject, body, sender):
         bedrock = boto3.client('bedrock-runtime')
         
         prompt = f"""Extract the SSO group name from this user request. Return ONLY the group name, nothing else.
+IMPORTANT: Preserve "SSO" prefix as it's part of the actual group name.
 
 User request: "{desc}"
 
 Examples:
-- "add me to the sso aws ever.ag infra sandbox admin group" → "aws ever.ag infra sandbox admin"
-- "can you add me to SSO AWS Corp Admin" → "AWS Corp Admin"  
-- "need access to the sso cainthus production admin group" → "cainthus production admin"
+- "add me to the sso aws ever.ag infra sandbox admin group" → "SSO AWS Ever.Ag Infra Sandbox Admin"
+- "can you add me to SSO AWS Corp Admin" → "SSO AWS Corp Admin"  
+- "need access to the sso cainthus production admin group" → "SSO Cainthus Production Admin"
+- "add to SSO AWS Workspace Admin group" → "SSO AWS Workspace Admin"
 
 Group name:"""
 

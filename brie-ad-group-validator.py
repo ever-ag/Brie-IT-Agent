@@ -85,17 +85,51 @@ def check_group_type(group_name):
         
         ps_script = f"""
 Write-Output "START"
+$allGroups = @()
+
 try {{
-    $adGroups = Get-ADGroup -Filter "Name -like '*{safe_name}*'" -ErrorAction SilentlyContinue
-    if ($adGroups) {{
-        if ($adGroups -is [array]) {{
-            Write-Output "Found $($adGroups.Count) AD groups"
-            foreach ($group in $adGroups) {{
-                Write-Output "SSO_GROUP|$($group.Name)"
-            }}
+    # Try exact match first
+    $exactGroups = Get-ADGroup -Filter "Name -like '*{safe_name}*'" -ErrorAction SilentlyContinue
+    if ($exactGroups) {{
+        if ($exactGroups -is [array]) {{
+            $allGroups += $exactGroups
         }} else {{
-            Write-Output "Found 1 AD groups"
-            Write-Output "SSO_GROUP|$($adGroups.Name)"
+            $allGroups += @($exactGroups)
+        }}
+    }}
+    
+    # If no exact matches, try more targeted fuzzy matching
+    if ($allGroups.Count -eq 0) {{
+        # For SSO AWS requests, search for SSO AWS groups specifically
+        if ("{safe_name}" -like "*SSO*AWS*") {{
+            $ssoAwsGroups = Get-ADGroup -Filter "Name -like 'SSO AWS*'" -ErrorAction SilentlyContinue
+            if ($ssoAwsGroups) {{
+                if ($ssoAwsGroups -is [array]) {{
+                    $allGroups += $ssoAwsGroups
+                }} else {{
+                    $allGroups += @($ssoAwsGroups)
+                }}
+            }}
+        }}
+        # For other patterns, try partial keyword matching
+        elseif ("{safe_name}" -like "*Workspace*") {{
+            $workspaceGroups = Get-ADGroup -Filter "Name -like '*Workspace*'" -ErrorAction SilentlyContinue
+            if ($workspaceGroups) {{
+                if ($workspaceGroups -is [array]) {{
+                    $allGroups += $workspaceGroups
+                }} else {{
+                    $allGroups += @($workspaceGroups)
+                }}
+            }}
+        }}
+    }}
+    
+    # Remove duplicates and output results
+    $uniqueGroups = $allGroups | Sort-Object Name -Unique
+    if ($uniqueGroups) {{
+        Write-Output "Found $($uniqueGroups.Count) AD groups"
+        foreach ($group in $uniqueGroups) {{
+            Write-Output "SSO_GROUP|$($group.Name)"
         }}
     }}
 }} catch {{
