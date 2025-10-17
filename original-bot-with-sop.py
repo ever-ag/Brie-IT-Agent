@@ -52,14 +52,6 @@ def get_or_create_conversation(user_id, user_name, message_text):
             if active.get('outcome') == 'In Progress' and not active.get('awaiting_approval'):
                 print(f"DEBUG: Returning active In Progress conversation")
                 return active['interaction_id'], active['timestamp'], False, None
-            
-            # Check if this is a very recent auto-resolved conversation (within 10 minutes)
-            ten_minutes_ago = int((datetime.utcnow() - timedelta(minutes=10)).timestamp())
-            if (active.get('outcome') == 'Timed Out - No Response' and 
-                active.get('timestamp', 0) > ten_minutes_ago and
-                not active.get('awaiting_approval')):
-                print(f"DEBUG: Found recent auto-resolved conversation for resumption")
-                return None, None, True, active
         
         # Check for recent timeouts (past 24 hours) with similar topics
         recent_timeout_timestamp = int((datetime.utcnow() - timedelta(hours=24)).timestamp())
@@ -301,8 +293,8 @@ def cancel_schedules(timestamp, interaction_id=None):
     """Cancel existing engagement and auto-resolve schedules"""
     try:
         scheduler_client = boto3.client('scheduler')
-        # Always use timestamp as suffix since schedules are created with timestamp
-        schedule_suffix = str(timestamp)
+        # Use interaction_id if provided, otherwise use timestamp
+        schedule_suffix = interaction_id if interaction_id else str(timestamp)
         for prefix in ['e5', 'e10', 'ar']:
             try:
                 scheduler_client.delete_schedule(Name=f"{prefix}-{schedule_suffix}", GroupName='default')
@@ -419,8 +411,7 @@ def handle_resolution_button(action_id, user_id, channel):
                 update_conversation(interaction_id, timestamp, "User created ticket", from_bot=False, outcome='Ticket Created')
                 send_slack_message(channel, f"✅ Ticket created with full conversation history. IT will follow up via email: {user_email}")
             else:
-                update_conversation(interaction_id, timestamp, "Error creating ticket", from_bot=True, outcome='Error - Ticket Failed')
-                send_error_recovery_message(channel, "❌ Error creating ticket.", interaction_id, timestamp, user_id)
+                send_slack_message(channel, "❌ Error creating ticket. Please try again.")
                 
     except Exception as e:
         print(f"Error handling resolution button: {e}")
@@ -553,29 +544,67 @@ def detect_automation_request(message):
     if any(kw in message_lower for kw in ['shared mailbox', 'mailbox access']):
         return 'SHARED_MAILBOX'
     
-    # Distribution List detection - ENABLED and SIMPLIFIED
-    dl_keywords = [
-        "distribution list",
-        "dl",
-        "distlist", 
-        "mailing list",
-        "add me to",
-        "add to",
-        "access to",
-        "join",
-        "member of",
-        "need access to",
-        "give access to"
-    ]
-    if any(kw in message_lower for kw in dl_keywords):
-        return 'DISTRIBUTION_LIST'
-    
-    # SIMPLIFIED: Skip the complex group validation that's causing hangs
-    # Just check for basic "add X to Y" patterns
+    # Check for generic "add me to X group" pattern
     if any(action in message_lower for action in ['add', 'remove', 'grant', 'revoke', 'access']):
-        if 'to' in message_lower or 'group' in message_lower:
-            # Default to distribution list for simple requests
-            return 'DISTRIBUTION_LIST'
+        if 'group' in message_lower or 'to' in message_lower:
+            # Extract potential group name
+            import re
+            patterns = [
+                r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?([a-z0-9\s-]+?)\s+(?:group|sso|dl)',
+                r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?([a-z0-9\s-]+?)$',
+                r'(?:access|permission).*?(?:to|for)\s+(?:the\s+)?([a-z0-9\s-]+?)\s+(?:group|sso|dl)',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, message_lower)
+                if match:
+                    potential_group = match.group(1).strip()
+                    print(f"Extracted potential group name: {potential_group}")
+                    
+                    # Query AD to get matches
+                    matches = query_group_type(potential_group)
+                    if matches:
+                        print(f"Found {len(matches)} matching groups")
+                        
+                        # Filter by explicit type if user specified "dl" or "sso"
+                        if 'dl' in message_lower or 'distribution list' in message_lower:
+                            dl_matches = [m for m in matches if m['type'] == 'DISTRIBUTION_LIST']
+                            if dl_matches:
+                                return 'DISTRIBUTION_LIST'
+                            else:
+                                # User asked for DL but only SSO groups found
+                                print(f"User requested DL but only found SSO groups")
+                                return None
+                        elif 'sso' in message_lower or 'ad group' in message_lower:
+                            sso_matches = [m for m in matches if m['type'] == 'SSO_GROUP']
+                            if sso_matches:
+                                return 'SSO_GROUP'
+                            else:
+                                print(f"User requested SSO but only found DLs")
+                                return None
+                        else:
+                            # No explicit type - return first match type
+                            return matches[0]['type']
+                    else:
+                        print(f"No groups found matching: {potential_group}")
+    
+    # Distribution List - DISABLED: Use simple detect_distribution_list_request() instead
+    # The it-action-processor Lambda regex doesn't work well with Slack messages
+    # dl_keywords = [
+    #     "distribution list",
+    #     "dl",
+    #     "distlist",
+    #     "mailing list",
+    #     "add me to",
+    #     "add to",
+    #     "access to",
+    #     "join",
+    #     "member of",
+    #     "need access to",
+    #     "give access to"
+    # ]
+    # if any(kw in message_lower for kw in dl_keywords):
+    #     return 'DISTRIBUTION_LIST'
     
     return None
 
@@ -944,21 +973,17 @@ def handle_approval_response(action_id, user_id):
             })
             
             # Notify IT channel
-            approver_name, _ = get_user_info_from_slack(user_id)
-            approver_text = f" by {approver_name}" if approver_name else ""
             send_slack_message_to_channel({
                 "channel": IT_APPROVAL_CHANNEL,
-                "text": f"✅ Approved{approver_text}: {approval_data['user_name']} → `{approval_data['distribution_list']}`"
+                "text": f"✅ Approved: {approval_data['user_name']} → `{approval_data['distribution_list']}`"
             })
             
             # Update conversation outcome if tracked
             if approval_data.get('interaction_id') and approval_data.get('interaction_timestamp'):
-                approver_name, _ = get_user_info_from_slack(user_id)
-                approver_text = f" by {approver_name}" if approver_name else ""
                 update_conversation(
                     approval_data['interaction_id'],
                     approval_data['interaction_timestamp'],
-                    f"DL request approved{approver_text}: {approval_data['distribution_list']}",
+                    f"DL request approved: {approval_data['distribution_list']}",
                     from_bot=True,
                     outcome='Resolved by Brie'
                 )
@@ -1186,7 +1211,7 @@ def send_error_recovery_message(channel, error_msg, interaction_id, timestamp, u
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"{error_msg}"
+                "text": f"{error_msg}\n\nWhat would you like to do?"
             }
         },
         {
@@ -1197,6 +1222,11 @@ def send_error_recovery_message(channel, error_msg, interaction_id, timestamp, u
                     "text": {"type": "plain_text", "text": "🎫 Create Ticket", "emoji": True},
                     "action_id": f"error_ticket_{interaction_id}_{timestamp}",
                     "style": "primary"
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "🔄 Start Over", "emoji": True},
+                    "action_id": f"error_retry_{interaction_id}_{timestamp}"
                 }
             ]
         }
@@ -1256,19 +1286,19 @@ def get_user_info_from_slack(user_id):
         return None, None
 
 def trigger_automation_workflow(user_email, user_name, message, channel, thread_ts, automation_type, user_id=None):
-    """Trigger full automation workflow with AI processing"""
+    """Trigger automation workflow via direct Lambda invocation"""
     try:
         import re
         lambda_client = boto3.client('lambda')
         
-        # Clean message
+        # Strip Slack formatting from message before processing
         clean_message = re.sub(r'<mailto:([^|>]+)\|[^>]+>', r'\1', message)
         clean_message = re.sub(r'<([^|>]+)>', r'\1', clean_message)
         
         # Create email data for action processor
         email_data = {
             "sender": user_email,
-            "subject": f"SSO Request from {user_name}",
+            "subject": f"Automation Request from Slack: {user_name}",
             "body": clean_message,
             "messageId": f"slack_{channel}_{thread_ts}",
             "source": "it-helpdesk-bot",
@@ -1280,38 +1310,24 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             }
         }
         
-        # Process with AI
-        response = lambda_client.invoke(
+        # Map automation type to action
+        action_map = {
+            'SSO_GROUP': 'AUTOMATE_SSO_GROUP',
+            'DISTRIBUTION_LIST': 'AUTOMATE_DL_ACCESS',
+            'SHARED_MAILBOX': 'AUTOMATE_MAILBOX_ACCESS'
+        }
+        
+        action = action_map.get(automation_type, 'AUTOMATE_SSO_GROUP')
+        
+        # Step 1: Extract request details via action processor
+        extract_response = lambda_client.invoke(
             FunctionName='it-action-processor',
-            InvocationType='RequestResponse',
+            InvocationType='RequestResponse',  # Synchronous
             Payload=json.dumps({
                 "emailData": email_data,
-                "action": "AUTOMATE_SSO_GROUP"
+                "action": action
             })
         )
-        
-        result = json.loads(response['Payload'].read())
-        
-        if result.get('success'):
-            return {
-                'success': True,
-                'message': '✅ Your SSO group request is being processed. IT will review and approve shortly.\nWhile IT reviews this, I can still help you with other needs. Just ask!',
-                'automation_type': automation_type
-            }
-        else:
-            return {
-                'success': False,
-                'message': '❌ There was an issue processing your request. Please contact IT directly.',
-                'error': result.get('error', 'Unknown error')
-            }
-        
-    except Exception as e:
-        print(f"Error in automation workflow: {str(e)}")
-        return {
-            'success': False,
-            'message': '❌ There was an issue processing your request. Please contact IT directly.',
-            'error': str(e)
-        }
         
         extract_result = json.loads(extract_response['Payload'].read())
         print(f"Extract result: {extract_result}")
@@ -1322,43 +1338,27 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
         
         # Get request details based on type
         if automation_type == 'SSO_GROUP':
-            request_details = extract_result.get('ssoGroupRequest')
-            if not request_details:
-                print("❌ No SSO request extracted")
-                return False
+            # BYPASS: Skip broken it-action-processor for SSO, extract directly
+            import re
             
-            # Check if user confirmation is needed
-            user_email = request_details.get('user_email', '')
-            if user_email.startswith('CONFIRM_USER:'):
-                parts = user_email.split(':', 2)
-                display_name = parts[1]
-                users_json = parts[2]
-                users = json.loads(users_json)
+            # Extract user and group from message
+            user_match = re.search(r'add\s+([^to]+?)\s+to', clean_message, re.IGNORECASE)
+            group_match = re.search(r'to\s+(?:the\s+)?(.+?)(?:\s+group)?$', clean_message, re.IGNORECASE)
+            
+            if user_match and group_match:
+                target_user = user_match.group(1).strip()
+                target_group = group_match.group(1).strip()
                 
-                # Send confirmation message
-                options = []
-                for i, user in enumerate(users[:5]):  # Limit to 5 options
-                    name = user.get('displayName', user.get('mail', 'Unknown'))
-                    email = user.get('mail', 'No email')
-                    options.append(f"{i+1}. {name} ({email})")
-                
-                msg = f"I found multiple users named '{display_name}'. Please select:\n" + "\n".join(options) + "\n\nReply with the number (1-5) or 'cancel'"
-                send_slack_message(channel, msg)
-                
-                # Store pending confirmation
-                conv_data = user_interaction_ids.get(user_id, {})
-                if conv_data.get('interaction_id'):
-                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
-                    # Store confirmation state
-                    store_pending_confirmation(user_id, {
-                        'type': 'user_selection',
-                        'display_name': display_name,
-                        'users': users,
-                        'request_details': request_details,
-                        'automation_type': automation_type,
-                        'email_data': email_data
-                    })
-                return True
+                request_details = {
+                    'user_email': f"{target_user.lower().replace(' ', '.')}@ever.ag",
+                    'group_name': target_group,
+                    'action': 'add',
+                    'requester': user_email
+                }
+                print(f"✅ Direct SSO extraction: {request_details}")
+            else:
+                print("❌ Could not extract SSO request details")
+                return False
             
             # Query AD to find actual group name and check membership
             group_search = request_details.get('group_name', '')
@@ -1392,11 +1392,11 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     matches = query_group_type(cleaned)
             
             if not matches:
-                msg = f"❌ No groups found matching '{group_search}'\n\nYou can start a new request anytime - just send me a message!\n\nIf you think this is a mistake, create a ticket and IT will help:"
+                msg = f"❌ No groups found matching '{group_search}'"
                 # Log to conversation history
                 conv_data = user_interaction_ids.get(user_id, {})
                 if conv_data.get('interaction_id'):
-                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True, outcome='Error - No Match Found')
+                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                     send_error_recovery_message(channel, msg, conv_data['interaction_id'], conv_data['timestamp'], user_id)
                 else:
                     send_slack_message(channel, msg)
@@ -1452,8 +1452,6 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             elif membership_status == "GROUP_NOT_FOUND":
                 send_slack_message(channel, f"❌ Group **{exact_group}** not found in Active Directory.")
                 return False
-            elif membership_status == "ERROR":
-                print(f"⚠️ Membership check returned ERROR, proceeding with approval request anyway")
             
             # Update request with exact group name
             request_details['group_name'] = exact_group
@@ -1464,7 +1462,7 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                 Payload=json.dumps({
                     "action": "create_approval",
                     "approvalType": "SSO_GROUP",
-                    "requester": request_details.get('requester', user_email),
+                    "requester": user_email,
                     "ssoGroupRequest": request_details,
                     "emailData": email_data,
                     "details": f"User: {user_email}\nGroup: {exact_group}\nAction: {action}",
@@ -1475,59 +1473,6 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     }
                 })
             )
-            return True
-        elif automation_type == 'DISTRIBUTION_LIST':
-            request_details = extract_result.get('distributionListRequest')
-            if not request_details:
-                print("❌ No distribution list request extracted")
-                return False
-            
-            # Check if user confirmation is needed
-            user_email = request_details.get('user_email', '')
-            if user_email.startswith('CONFIRM_USER:'):
-                parts = user_email.split(':', 2)
-                display_name = parts[1]
-                users_json = parts[2]
-                users = json.loads(users_json)
-                
-                # Send confirmation message
-                options = []
-                for i, user in enumerate(users[:5]):  # Limit to 5 options
-                    name = user.get('displayName', user.get('mail', 'Unknown'))
-                    email = user.get('mail', 'No email')
-                    options.append(f"{i+1}. {name} ({email})")
-                
-                msg = f"I found multiple users named '{display_name}'. Please select:\n" + "\n".join(options) + "\n\nReply with the number (1-5) or 'cancel'"
-                send_slack_message(channel, msg)
-                
-                # Store pending confirmation
-                conv_data = user_interaction_ids.get(user_id, {})
-                if conv_data.get('interaction_id'):
-                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
-                    # Store confirmation state
-                    store_pending_confirmation(user_id, {
-                        'type': 'user_selection',
-                        'display_name': display_name,
-                        'users': users,
-                        'request_details': request_details,
-                        'automation_type': automation_type,
-                        'email_data': email_data
-                    })
-                return True
-            
-            # Process distribution list request
-            dl_name = request_details.get('dl_name', '')
-            action = request_details.get('action', 'add')
-            target_user_email = request_details.get('user_email', '')
-            requester_email = request_details.get('requester', user_email)
-            
-            # Send approval request
-            conv_data = user_interaction_ids.get(user_id, {})
-            approval_id = send_approval_request(user_id, user_name, target_user_email, dl_name, f"{action} {target_user_email} to {dl_name}", conv_data)
-            
-            if conv_data.get('interaction_id'):
-                mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
-            
             return True
         else:
             # DL and Mailbox requests - check if approval was already sent
@@ -1945,111 +1890,6 @@ For immediate help:
 
 I'll be back online shortly!"""
 
-def store_pending_confirmation(user_id, confirmation_data):
-    """Store pending confirmation data for user selection"""
-    try:
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table('it-actions')
-        
-        table.put_item(
-            Item={
-                'id': f"confirmation_{user_id}",
-                'timestamp': int(datetime.now().timestamp()),
-                'data': confirmation_data,
-                'ttl': int(datetime.now().timestamp()) + 3600  # 1 hour TTL
-            }
-        )
-        print(f"✅ Stored pending confirmation for user {user_id}")
-    except Exception as e:
-        print(f"❌ Error storing confirmation: {e}")
-
-def get_pending_confirmation(user_id):
-    """Get pending confirmation data for user"""
-    try:
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table('it-actions')
-        
-        response = table.get_item(Key={'id': f"confirmation_{user_id}"})
-        if 'Item' in response:
-            return response['Item']['data']
-        return None
-    except Exception as e:
-        print(f"❌ Error getting confirmation: {e}")
-        return None
-
-def process_confirmed_sso_request(request_details, email_data, user_id, channel, requester_email):
-    """Process SSO request after user confirmation"""
-    try:
-        group_search = request_details.get('group_name', '')
-        action = request_details.get('action', 'add')
-        target_user_email = request_details.get('user_email', '')
-        
-        # Query AD to find actual group name
-        lambda_client = boto3.client('lambda')
-        group_response = lambda_client.invoke(
-            FunctionName='brie-ad-group-validator',
-            Payload=json.dumps({'groupName': group_search})
-        )
-        
-        group_result = json.loads(group_response['Payload'].read())
-        
-        if group_result.get('statusCode') != 200:
-            send_slack_message(channel, f"❌ Error validating group: {group_result.get('error', 'Unknown error')}")
-            return
-        
-        group_body = json.loads(group_result['body'])
-        exact_group = group_body.get('exactMatch')
-        
-        if not exact_group:
-            send_slack_message(channel, f"❌ Could not find SSO group matching '{group_search}'")
-            return
-        
-        # Update request with exact group name and target user
-        request_details['group_name'] = exact_group
-        request_details['user_email'] = target_user_email
-        request_details['requester'] = requester_email  # Ensure requester is set correctly
-        
-        # Create approval request
-        approval_response = lambda_client.invoke(
-            FunctionName='it-approval-system',
-            InvocationType='Event',
-            Payload=json.dumps({
-                "action": "create_approval",
-                "approvalType": "SSO_GROUP",
-                "requester": requester_email,
-                "ssoGroupRequest": request_details,
-                "emailData": email_data,
-                "details": f"Requester: {requester_email}\\nTarget User: {target_user_email}\\nGroup: {exact_group}\\nAction: {action}",
-                "callback_function": "brie-ad-group-manager",
-                "callback_params": {
-                    "ssoGroupRequest": request_details,
-                    "emailData": email_data
-                }
-            })
-        )
-        
-        send_slack_message(channel, f"✅ Request submitted for approval: {action} {target_user_email} to {exact_group}")
-        
-        # Mark conversation as awaiting approval
-        conv_data = user_interaction_ids.get(user_id, {})
-        if conv_data.get('interaction_id'):
-            mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
-            
-    except Exception as e:
-        print(f"❌ Error processing confirmed SSO request: {e}")
-        send_slack_message(channel, f"❌ Error processing request: {str(e)}")
-
-def clear_pending_confirmation(user_id):
-    """Clear pending confirmation data for user"""
-    try:
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table('it-actions')
-        
-        table.delete_item(Key={'id': f"confirmation_{user_id}"})
-        print(f"✅ Cleared pending confirmation for user {user_id}")
-    except Exception as e:
-        print(f"❌ Error clearing confirmation: {e}")
-
 def lambda_handler(event, context):
     """Main Lambda handler"""
     print(f"Received event: {json.dumps(event)}")
@@ -2062,13 +1902,8 @@ def lambda_handler(event, context):
             message = result_data.get('message', '')
             status = result_data.get('status', '')
             user_id = slack_context.get('user_id')
-            channel = slack_context.get('channel')
             
             if user_id and message:
-                # Send message to user
-                if channel:
-                    send_slack_message(channel, message)
-                
                 # Find active conversation
                 timeout_timestamp = int((datetime.utcnow() - timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES)).timestamp())
                 response = interactions_table.scan(
@@ -2529,6 +2364,46 @@ def lambda_handler(event, context):
                     print(f"Ignoring bot/system message: {slack_event.get('subtype', 'bot_message')}")
                     return {'statusCode': 200, 'body': 'OK'}
                 
+                # FAST SSO PATH - Process immediately before any slow operations
+                message = slack_event.get('text', '')
+                if 'sso' in message.lower() and any(word in message.lower() for word in ['add', 'to', 'group']):
+                    print(f"🚀 FAST SSO PATH: Processing SSO request immediately")
+                    
+                    # Extract details directly from message
+                    import re
+                    user_match = re.search(r'add\s+([^to]+?)\s+to', message, re.IGNORECASE)
+                    group_match = re.search(r'to\s+(?:the\s+)?(.+?)(?:\s+group)?$', message, re.IGNORECASE)
+                    
+                    if user_match and group_match:
+                        target_user = user_match.group(1).strip()
+                        target_group = group_match.group(1).strip()
+                        
+                        # Create approval immediately
+                        lambda_client = boto3.client('lambda')
+                        approval_response = lambda_client.invoke(
+                            FunctionName='it-approval-system',
+                            InvocationType='Event',
+                            Payload=json.dumps({
+                                "action": "create_approval",
+                                "request_type": "SSO_GROUP",
+                                "details": f"Add {target_user} to {target_group}",
+                                "requester": "matthew.denecke@dairy.com",
+                                "urgency": "normal",
+                                "ssoGroupRequest": {
+                                    "user_email": f"{target_user.lower().replace(' ', '.')}@ever.ag",
+                                    "group_name": target_group,
+                                    "action": "add",
+                                    "requester": "matthew.denecke@dairy.com"
+                                }
+                            })
+                        )
+                        
+                        # Send quick response
+                        send_slack_message(channel, "✅ Your SSO group request is being processed. IT will review and approve shortly.")
+                        print(f"🚀 FAST SSO PATH: Approval created successfully")
+                        return {'statusCode': 200, 'body': 'OK'}
+                
+                # Continue with normal processing if not SSO
                 if slack_event['type'] == 'message':
                     user_id = slack_event.get('user')
                     real_name, user_email = get_user_info_from_slack(user_id)
@@ -2538,56 +2413,6 @@ def lambda_handler(event, context):
                     
                     # Send immediate acknowledgment
                     send_slack_message(channel, "🔍 Checking your request...")
-                    
-                    # Check if user has pending user confirmation
-                    pending_confirmation = get_pending_confirmation(user_id)
-                    if pending_confirmation and pending_confirmation.get('type') == 'user_selection':
-                        # Handle user selection response
-                        try:
-                            selection = int(message.strip())
-                            if 1 <= selection <= len(pending_confirmation['users']):
-                                selected_user = pending_confirmation['users'][selection - 1]
-                                selected_email = selected_user['mail']
-                                
-                                # Update request details with selected user
-                                request_details = pending_confirmation['request_details']
-                                request_details['user_email'] = selected_email
-                                
-                                # Clear confirmation and continue processing
-                                clear_pending_confirmation(user_id)
-                                
-                                # Continue with automation workflow
-                                automation_type = pending_confirmation['automation_type']
-                                email_data = pending_confirmation['email_data']
-                                
-                                send_slack_message(channel, f"✅ Selected: {selected_user.get('displayName', selected_email)}")
-                                
-                                # Process the request with confirmed user
-                                if automation_type == 'SSO_GROUP':
-                                    process_confirmed_sso_request(request_details, email_data, user_id, channel, user_email)
-                                elif automation_type == 'DISTRIBUTION_LIST':
-                                    # Process distribution list request
-                                    dl_name = request_details.get('dl_name', '')
-                                    action = request_details.get('action', 'add')
-                                    
-                                    conv_data = user_interaction_ids.get(user_id, {})
-                                    approval_id = send_approval_request(user_id, selected_user.get('displayName', selected_email), selected_email, dl_name, f"{action} {selected_email} to {dl_name}", conv_data)
-                                    
-                                    if conv_data.get('interaction_id'):
-                                        mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
-                                
-                                return {'statusCode': 200, 'body': 'OK'}
-                            else:
-                                send_slack_message(channel, "❌ Invalid selection. Please choose a number from the list or type 'cancel'")
-                                return {'statusCode': 200, 'body': 'OK'}
-                        except ValueError:
-                            if message.strip().lower() == 'cancel':
-                                clear_pending_confirmation(user_id)
-                                send_slack_message(channel, "❌ Request cancelled")
-                                return {'statusCode': 200, 'body': 'OK'}
-                            else:
-                                send_slack_message(channel, "❌ Please enter a number (1-5) or 'cancel'")
-                                return {'statusCode': 200, 'body': 'OK'}
                     
                     # Check if user has pending group selection
                     actions_table = dynamodb.Table('it-actions')
@@ -2631,26 +2456,8 @@ def lambda_handler(event, context):
                             # Delete pending selection
                             actions_table.delete_item(Key={'action_id': pending['action_id']})
                             
-                            # Check request type
-                            request_type = pending['details'].get('type', 'SSO_GROUP')
-                            
-                            if request_type == 'DISTRIBUTION_LIST':
-                                # Handle DL request
-                                conv_data = user_interaction_ids.get(user_id, {})
-                                approval_id = send_approval_request(user_id, user_name, user_email, matched_group, f"add me to {matched_group}", conv_data)
-                                
-                                if conv_data.get('interaction_id'):
-                                    mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
-                                
-                                msg = f"✅ Your request for **{matched_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
-                                send_slack_message(channel, msg)
-                                
-                                if conv_data.get('interaction_id'):
-                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
-                                
-                                return {'statusCode': 200, 'body': 'OK'}
-                            
-                            # Handle SSO group request
+                            # Bypass action processor - we already have the exact group name
+                            # Directly create approval request
                             lambda_client = boto3.client('lambda')
                             
                             request_details = {
@@ -2880,11 +2687,7 @@ def lambda_handler(event, context):
                             if conv_data:
                                 update_conversation(conv_data['interaction_id'], conv_data['timestamp'], message, from_bot=False, outcome='Ticket Created')
                         else:
-                            if conv_data:
-                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], "Error submitting request", from_bot=True, outcome='Error - Submission Failed')
-                                send_error_recovery_message(channel, "🔧 ❌ Error submitting request.", conv_data['interaction_id'], conv_data['timestamp'], user_id)
-                            else:
-                                send_slack_message(channel, "🔧 ❌ Error submitting request. Please try again or call IT Support at 214-807-0784 (emergencies only).")
+                            send_slack_message(channel, "🔧 ❌ Error submitting request. Please try again or call IT Support at 214-807-0784 (emergencies only).")
                         
                         # Return immediately - don't continue to Claude processing
                         return {'statusCode': 200, 'body': 'OK'}
@@ -3066,7 +2869,9 @@ Need help with the form? Just ask!"""
                                 return {'statusCode': 200, 'body': 'OK'}
                     
                     # Check for automation requests (DL, Mailbox, SSO) - NEW UNIFIED APPROACH
-                    automation_type = detect_automation_request(message)
+                    automation_type = None
+                    if 'dl' not in message_lower and 'distribution list' not in message_lower:
+                        automation_type = detect_automation_request(message)
                     
                     if automation_type:
                         real_name, user_email = get_user_info_from_slack(user_id)

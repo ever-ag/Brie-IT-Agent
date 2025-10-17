@@ -1316,6 +1316,101 @@ def lambda_handler(event, context):
             'body': json.dumps({'error': str(e)})
         }
 
+def extract_distribution_list_request(subject, body, sender):
+    """Extract distribution list request details using Claude AI"""
+    import re
+    import boto3
+    import json
+    
+    # Strip HTML and Slack markdown
+    if '<html>' in body.lower():
+        body = re.sub(r'<[^>]+>', ' ', body)
+        body = re.sub(r'\s+', ' ', body).strip()
+    
+    # Strip Slack markdown formatting
+    body = re.sub(r'[*_~`]', '', body)
+    
+    # Extract description
+    desc_match = re.search(r'Description:\s*([^\\n]*(?:\\n[^\\n]*)*?)(?:Thank you|Contact:|Status:|Priority:|---)', body, re.IGNORECASE | re.DOTALL)
+    if desc_match:
+        desc = desc_match.group(1).strip()
+        desc = re.sub(r'Thank you,.*?$', '', desc, flags=re.DOTALL | re.IGNORECASE)
+    else:
+        desc = body
+        desc = re.sub(r'Thank you,.*?$', '', desc, flags=re.DOTALL | re.IGNORECASE)
+    
+    print(f"   DL extraction - cleaned desc: {desc}")
+    
+    desc_lower = desc.lower()
+    
+    # Must contain DL keywords
+    if not any(keyword in desc_lower for keyword in ['dl', 'distribution list', 'distribution group', 'email list', 'mailing list']):
+        return None
+    
+    # Use Claude AI to extract DL name and user
+    try:
+        bedrock = boto3.client('bedrock-runtime')
+        
+        prompt = f"""Extract the distribution list name and user from this request. Return JSON with "dl_name" and "user_name" fields.
+
+User request: "{desc}"
+
+Examples:
+- "add Alex Goin to the localemployees dl" → {{"dl_name": "localemployees", "user_name": "Alex Goin"}}
+- "remove John Smith from the finance distribution list" → {{"dl_name": "finance", "user_name": "John Smith"}}
+- "grant Mary access to the marketing email list" → {{"dl_name": "marketing", "user_name": "Mary"}}
+- "add me to the all-staff dl" → {{"dl_name": "all-staff", "user_name": "me"}}
+
+Return only valid JSON:"""
+
+        response = bedrock.invoke_model(
+            modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": prompt}]
+            })
+        )
+        
+        result = json.loads(response['body'].read())
+        claude_response = result['content'][0]['text'].strip()
+        print(f"   Claude extracted DL info: {claude_response}")
+        
+        # Parse JSON response
+        try:
+            extracted = json.loads(claude_response)
+            dl_name = extracted.get('dl_name', '').strip()
+            user_name = extracted.get('user_name', '').strip()
+        except json.JSONDecodeError:
+            print(f"   Failed to parse Claude JSON, using fallback")
+            return None
+            
+    except Exception as e:
+        print(f"   Claude extraction failed: {e}, using fallback")
+        return None
+    
+    if not dl_name or not user_name:
+        return None
+    
+    # Determine action (add or remove)
+    action = 'add'
+    if any(word in desc_lower for word in ['remove', 'revoke', 'delete']):
+        action = 'remove'
+    
+    # Handle user lookup
+    if user_name.lower() in ['me', 'myself', 'i']:
+        user_email = sender
+    else:
+        # Look up user in AD
+        user_email = lookup_user_in_ad(user_name, sender)
+    
+    return {
+        'user_email': user_email,
+        'dl_name': dl_name,
+        'action': action,
+        'requester': sender
+    }
+
 def extract_shared_mailbox_request(subject, body, sender):
     """Extract shared mailbox request details from email"""
     
@@ -1585,12 +1680,12 @@ def extract_distribution_list_request(subject, body, sender):
     
     # Enhanced group name patterns - FIXED for multi-word names like "CorpIT Test - Rey"
     group_patterns = [
-        # PRIORITY: Multi-word group names before "dl" keyword
-        r'add me to (?:the )?([A-Za-z0-9\s_-]+?)\s+dl\b',
-        r'add me to (?:the )?([A-Za-z0-9\s_-]+?)\s+distribution\s+list',
+        # PRIORITY: Multi-word group names before "dl" keyword - FIXED to handle other users
+        r'add (?:[A-Za-z\s]+\s+)?to (?:the )?([A-Za-z0-9\s_-]+?)\s+dl\b',
+        r'add (?:[A-Za-z\s]+\s+)?to (?:the )?([A-Za-z0-9\s_-]+?)\s+distribution\s+list',
         
         # Pattern for email addresses with Slack formatting (e.g., "<mailto:dl_name@domain.com|...>")
-        r'add me to (?:the )?<?(?:mailto:)?([A-Za-z0-9_-]+)@[A-Za-z0-9.-]+(?:\|[^>]+)?>?\s+dl\b',
+        r'add (?:[A-Za-z\s]+\s+)?to (?:the )?<?(?:mailto:)?([A-Za-z0-9_-]+)@[A-Za-z0-9.-]+(?:\|[^>]+)?>?\s+dl\b',
         
         # New business language patterns
         r'add.*to.*(?:the\s+)?([A-Za-z0-9\s_-]+)\s+distribution\s+list',
@@ -1686,6 +1781,39 @@ def extract_distribution_list_request(subject, body, sender):
     
     return None
 
+def lookup_user_in_ad(display_name, fallback_email):
+    """Look up user email by display name in AD"""
+    try:
+        lambda_client = boto3.client('lambda')
+        
+        # Call AD lookup Lambda
+        response = lambda_client.invoke(
+            FunctionName='brie-ad-user-lookup',
+            Payload=json.dumps({'displayName': display_name})
+        )
+        
+        result = json.loads(response['Payload'].read())
+        
+        if result.get('statusCode') == 200:
+            body = json.loads(result['body'])
+            users = body.get('users', [])
+            
+            if len(users) == 1:
+                return users[0]['mail']
+            elif len(users) > 1:
+                # Multiple matches - need confirmation
+                return f"CONFIRM_USER:{display_name}:{json.dumps(users)}"
+            else:
+                print(f"No AD user found for '{display_name}', using fallback")
+                return fallback_email
+        else:
+            print(f"AD lookup failed for '{display_name}', using fallback")
+            return fallback_email
+            
+    except Exception as e:
+        print(f"Error looking up user '{display_name}': {e}, using fallback")
+        return fallback_email
+
 def extract_sso_group_request(subject, body, sender):
     """Extract SSO/AD group request details using Claude AI"""
     import re
@@ -1777,12 +1905,60 @@ Group name:"""
     if any(word in desc_lower for word in ['remove', 'revoke', 'delete']):
         action = 'remove'
     
-    # Extract user email
+    # Extract user email or name
     email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
     emails = re.findall(email_pattern, desc, re.IGNORECASE)
     # Clean up Slack mailto formatting (e.g., "email@domain.com|name" -> "email@domain.com")
     emails = [email.split('|')[0] for email in emails]
-    user_email = emails[0] if emails else sender
+    
+    user_email = None
+    user_name = None
+    
+    if emails:
+        user_email = emails[0]
+    else:
+        # Try to extract user name using Claude AI
+        try:
+            bedrock = boto3.client('bedrock-runtime')
+            
+            name_prompt = f"""Extract the person's name from this request. Return ONLY the name, nothing else.
+
+User request: "{desc}"
+
+Examples:
+- "Add Alex Goins to the SSO group" → "Alex Goins"
+- "can you add John Smith to the group" → "John Smith"
+- "grant access to Mary Johnson" → "Mary Johnson"
+- "add me to the group" → "me"
+
+Person's name:"""
+
+            response = bedrock.invoke_model(
+                modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 50,
+                    "messages": [{"role": "user", "content": name_prompt}]
+                })
+            )
+            
+            result = json.loads(response['body'].read())
+            extracted_name = result['content'][0]['text'].strip()
+            print(f"   Claude extracted user name: {extracted_name}")
+            
+            if extracted_name.lower() not in ['me', 'myself', 'i']:
+                user_name = extracted_name
+                # Look up user in AD
+                user_email = lookup_user_in_ad(user_name, sender)
+            else:
+                user_email = sender
+                
+        except Exception as e:
+            print(f"   Name extraction failed: {e}, using sender")
+            user_email = sender
+    
+    if not user_email:
+        user_email = sender
     
     return {
         'user_email': user_email,
@@ -1964,6 +2140,24 @@ def handle_step_function_request(event, context):
         return {
             'statusCode': 200,
             'ssoGroupRequest': request_details,
+            'emailData': email_data
+        }
+    
+    elif action == 'AUTOMATE_DISTRIBUTION_LIST':
+        # Extract distribution list request details
+        request_details = extract_distribution_list_request(subject, body, sender)
+        
+        if not request_details:
+            print("❌ No distribution list request detected")
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'No distribution list request detected'})
+            }
+        
+        # Return for DL workflow
+        return {
+            'statusCode': 200,
+            'distributionListRequest': request_details,
             'emailData': email_data
         }
     

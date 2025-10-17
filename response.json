@@ -1,0 +1,1 @@
+{"statusCode": 200, "body": "{\"users\": [{\"displayName\": \"Alexander Goins\", \"mail\": \"alexander.goins@ever.ag\", \"samAccountName\": \"agoins\"}, {\"displayName\": \"Alex Smith\", \"mail\": \"alex.smith@ever.ag\", \"samAccountName\": \"asmith\"}]}"}
