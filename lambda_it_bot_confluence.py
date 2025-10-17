@@ -301,8 +301,8 @@ def cancel_schedules(timestamp, interaction_id=None):
     """Cancel existing engagement and auto-resolve schedules"""
     try:
         scheduler_client = boto3.client('scheduler')
-        # Use interaction_id if provided, otherwise use timestamp
-        schedule_suffix = interaction_id if interaction_id else str(timestamp)
+        # Always use timestamp as suffix since schedules are created with timestamp
+        schedule_suffix = str(timestamp)
         for prefix in ['e5', 'e10', 'ar']:
             try:
                 scheduler_client.delete_schedule(Name=f"{prefix}-{schedule_suffix}", GroupName='default')
