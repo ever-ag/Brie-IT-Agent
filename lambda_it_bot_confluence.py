@@ -52,6 +52,14 @@ def get_or_create_conversation(user_id, user_name, message_text):
             if active.get('outcome') == 'In Progress' and not active.get('awaiting_approval'):
                 print(f"DEBUG: Returning active In Progress conversation")
                 return active['interaction_id'], active['timestamp'], False, None
+            
+            # Check if this is a very recent auto-resolved conversation (within 10 minutes)
+            ten_minutes_ago = int((datetime.utcnow() - timedelta(minutes=10)).timestamp())
+            if (active.get('outcome') == 'Timed Out - No Response' and 
+                active.get('timestamp', 0) > ten_minutes_ago and
+                not active.get('awaiting_approval')):
+                print(f"DEBUG: Found recent auto-resolved conversation for resumption")
+                return None, None, True, active
         
         # Check for recent timeouts (past 24 hours) with similar topics
         recent_timeout_timestamp = int((datetime.utcnow() - timedelta(hours=24)).timestamp())
