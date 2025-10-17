@@ -31,8 +31,8 @@ Unified system handling:
 
 ## KEY INFO
 - **APPROVAL CHANNEL:** C09KB40PL9J
-- **GITHUB REPO:** https://github.com/matthewdenecke/it-automation-system
-- **GITHUB ISSUE:** https://github.com/matthewdenecke/it-automation-system/issues/1
+- **GITHUB REPO:** https://github.com/ever-ag/Brie-IT-Agent
+- **GITHUB ISSUE:** https://github.com/ever-ag/Brie-IT-Agent/issues/42
 - **AWS PROFILE:** awscorp
 - **REGION:** us-east-1
 
