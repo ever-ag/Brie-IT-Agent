@@ -102,9 +102,20 @@ def lambda_handler(event, context):
                 'interaction_timestamp': params.get('interaction_timestamp')
             }
             approval_id = event.get('approval_id', 'N/A')
-        else:
-            # Direct invocation format
+        elif event.get('ssoGroupRequest'):
+            # Direct invocation format with nested ssoGroupRequest
             sso_request = event.get('ssoGroupRequest', {})
+            email_data = event.get('emailData', {})
+            approval_info = event.get('approvalInfo', {})
+            approval_id = approval_info.get('approval_id', 'N/A')
+        else:
+            # Direct invocation format with flat structure
+            sso_request = {
+                'user_email': event.get('user_email'),
+                'group_name': event.get('group_name'),
+                'action': event.get('action', 'add'),
+                'requester': event.get('requester')
+            }
             email_data = event.get('emailData', {})
             approval_info = event.get('approvalInfo', {})
             approval_id = approval_info.get('approval_id', 'N/A')
@@ -326,6 +337,7 @@ try {{
                 send_slack_message(channel, user_message)
                 
                 # Update conversation history
+                print(f"🔍 Conversation history update - interaction_id: {interaction_id}, timestamp: {interaction_timestamp}")
                 if interaction_id and interaction_timestamp:
                     try:
                         response = interactions_table.get_item(Key={'interaction_id': interaction_id, 'timestamp': interaction_timestamp})
