@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- **Issue #46: All Slack messages now logged to dashboard** - IT approval requests, approval/denial decisions, and completion messages are now properly logged to conversation history in the dashboard
 - **Distribution list approvals now automatically close conversations** - Added fallback DynamoDB lookup to find conversations when Lambda cold starts lose in-memory data
 - Distribution list requests now correctly categorized as "Access Management" (was "General Support")
 - Interaction logging to recent-interactions DynamoDB table now working for all conversations
@@ -14,12 +15,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Recent Interactions dashboard now updates properly after code deployment fix
 
 ### Added
+- Conversation logging function in it-approval-system to track all approval workflow messages
+- Timestamp parameter passed through automation workflow for accurate conversation tracking
 - Fallback conversation lookup in approval handler - searches DynamoDB for recent awaiting_approval conversations when interaction_id is NULL
 - Callback system in brie-infrastructure-connector to notify it-helpdesk-bot after DL approvals (for future use)
 - DynamoDB logging function (log_interaction_to_dynamodb) for all user interactions
 - Confluence wiki image upload feature (commit ada70e4) - uploads relevant images from wiki pages
 
 ### Changed
+- it-approval-system now logs all messages (approval requests, decisions, completions) to conversation history
+- trigger_automation_workflow now accepts and passes timestamp for conversation tracking
 - Categorization pattern changed from 'dl ' to ' dl' to match "employees dl" at end of message
 - Callback handler now sets outcome='Resolved by Brie' and awaiting_approval=False automatically
 - Approval handler now looks up conversations from DynamoDB instead of relying on in-memory cache

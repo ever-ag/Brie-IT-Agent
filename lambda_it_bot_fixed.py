@@ -1833,7 +1833,7 @@ def get_user_info_from_slack(user_id):
         print(f"Error getting user info: {e}")
         return None, None
 
-def trigger_automation_workflow(user_email, user_name, message, channel, thread_ts, automation_type, user_id=None, interaction_id=None):
+def trigger_automation_workflow(user_email, user_name, message, channel, thread_ts, automation_type, user_id=None, interaction_id=None, timestamp=None):
     """Trigger full automation workflow with AI processing"""
     try:
         import re
@@ -1855,7 +1855,8 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                 "channel": channel,
                 "thread_ts": thread_ts,
                 "user_name": user_name,
-                "user_id": user_id
+                "user_id": user_id,
+                "timestamp": timestamp
             },
             "interaction_id": interaction_id  # Pass conversation ID
         }
@@ -3865,7 +3866,8 @@ Need help with the form? Just ask!"""
                             slack_event.get('ts', ''),
                             automation_type,
                             user_id,
-                            interaction_id  # Pass conversation ID
+                            interaction_id,  # Pass conversation ID
+                            timestamp  # Pass timestamp for conversation logging
                         )
                         
                         if execution_arn == 'PENDING_SELECTION':
