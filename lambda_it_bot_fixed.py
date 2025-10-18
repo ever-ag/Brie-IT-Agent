@@ -3590,7 +3590,12 @@ def lambda_handler(event, context):
                                 'subject': f'SSO Group Access Request: {matched_group}',
                                 'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
                                 'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
-                                'source': 'it-helpdesk-bot'
+                                'source': 'it-helpdesk-bot',
+                                'slackContext': {
+                                    'channel': channel,
+                                    'user_name': user_name,
+                                    'user_id': user_id
+                                }
                             }
                             
                             approval_response = lambda_client.invoke(
