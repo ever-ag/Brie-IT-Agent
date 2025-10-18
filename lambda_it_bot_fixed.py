@@ -3560,7 +3560,7 @@ def lambda_handler(event, context):
                             
                             # Log user's selection to ORIGINAL conversation
                             if original_interaction_id:
-                                update_conversation(original_interaction_id, original_timestamp, message, from_user=True)
+                                update_conversation(original_interaction_id, original_timestamp, message, from_bot=False)
                             
                             # User selected a valid group
                             msg = f"✅ Got it! Processing your request for **{matched_group}**..."
@@ -3874,7 +3874,7 @@ Need help with the form? Just ask!"""
                                 # Log user's selection to conversation history
                                 conv_data = user_interaction_ids.get(user_id, {})
                                 if conv_data.get('interaction_id'):
-                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], message, from_user=True)
+                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], message, from_bot=False)
                                 
                                 # User selected a valid group
                                 msg = f"✅ Got it! Requesting access to **{selected_group}**..."
