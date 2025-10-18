@@ -297,6 +297,7 @@ def handle_sop_sso_request(message, user_id, channel):
             similar = validation.get('similar_groups', [])
             if similar:
                 print(f"❌ Group not found. Found {len(similar)} similar groups")
+                print(f"DEBUG: interaction_id={interaction_id}, timestamp={timestamp}")
                 # Store pending selection
                 actions_table = dynamodb.Table('it-actions')
                 actions_table.put_item(Item={
@@ -3550,8 +3551,24 @@ def lambda_handler(event, context):
                         print(f"DEBUG: Matched group: {matched_group}")
                         
                         if matched_group:
+                            # Get original conversation ID from pending selection
+                            original_interaction_id = pending['details'].get('interaction_id')
+                            original_timestamp = pending['details'].get('timestamp')
+                            original_channel = pending['details'].get('channel', channel)
+                            
+                            print(f"DEBUG: Using original conversation - interaction_id={original_interaction_id}, timestamp={original_timestamp}")
+                            
+                            # Log user's selection to ORIGINAL conversation
+                            if original_interaction_id:
+                                update_conversation(original_interaction_id, original_timestamp, message, from_user=True)
+                            
                             # User selected a valid group
-                            send_slack_message(channel, f"✅ Got it! Processing your request for **{matched_group}**...")
+                            msg = f"✅ Got it! Processing your request for **{matched_group}**..."
+                            send_slack_message(channel, msg)
+                            
+                            # Log to ORIGINAL conversation
+                            if original_interaction_id:
+                                update_conversation(original_interaction_id, original_timestamp, msg, from_bot=True)
                             
                             # Delete pending selection
                             actions_table.delete_item(Key={'action_id': pending['action_id']})
@@ -3561,17 +3578,16 @@ def lambda_handler(event, context):
                             
                             if request_type == 'DISTRIBUTION_LIST':
                                 # Handle DL request
-                                conv_data = user_interaction_ids.get(user_id, {})
-                                approval_id = send_approval_request(user_id, user_name, user_email, matched_group, f"add me to {matched_group}", conv_data)
+                                approval_id = send_approval_request(user_id, user_name, user_email, matched_group, f"add me to {matched_group}", {'interaction_id': original_interaction_id, 'timestamp': original_timestamp})
                                 
-                                if conv_data.get('interaction_id'):
-                                    mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                if original_interaction_id:
+                                    mark_conversation_awaiting_approval(original_interaction_id, original_timestamp)
                                 
                                 msg = f"✅ Your request for **{matched_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                                 send_slack_message(channel, msg)
                                 
-                                if conv_data.get('interaction_id'):
-                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                if original_interaction_id:
+                                    update_conversation(original_interaction_id, original_timestamp, msg, from_bot=True)
                                 
                                 return {'statusCode': 200, 'body': 'OK'}
                             
@@ -3589,14 +3605,26 @@ def lambda_handler(event, context):
                                 'sender': user_email,
                                 'subject': f'SSO Group Access Request: {matched_group}',
                                 'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
-                                'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
+                                'messageId': f'slack_{original_channel}_{int(datetime.utcnow().timestamp())}',
                                 'source': 'it-helpdesk-bot',
                                 'slackContext': {
-                                    'channel': channel,
+                                    'channel': original_channel,
                                     'user_name': user_name,
                                     'user_id': user_id
                                 }
                             }
+                            
+                            # Store interaction tracking
+                            if original_interaction_id:
+                                actions_table.put_item(Item={
+                                    'action_id': f"sso_tracking_{user_id}_{int(datetime.now().timestamp())}",
+                                    'action_type': 'sso_interaction_tracking',
+                                    'interaction_id': original_interaction_id,
+                                    'interaction_timestamp': original_timestamp,
+                                    'user_email': user_email,
+                                    'group_name': matched_group,
+                                    'timestamp': int(datetime.now().timestamp())
+                                })
                             
                             approval_response = lambda_client.invoke(
                                 FunctionName='it-approval-system',
@@ -3611,35 +3639,20 @@ def lambda_handler(event, context):
                                     "callback_function": "brie-ad-group-manager",
                                     "callback_params": {
                                         "ssoGroupRequest": request_details,
-                                        "emailData": email_data
+                                        "emailData": email_data,
+                                        "interaction_id": original_interaction_id,
+                                        "interaction_timestamp": original_timestamp
                                     }
                                 })
                             )
                             
-                            # Mark conversation as awaiting approval
-                            conv_data = user_interaction_ids.get(user_id, {})
-                            if conv_data.get('interaction_id'):
-                                mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                            # Mark ORIGINAL conversation as awaiting approval
+                            if original_interaction_id:
+                                mark_conversation_awaiting_approval(original_interaction_id, original_timestamp)
                                 
-                                # Create SSO interaction tracking for callback
-                                print(f"📝 Creating SSO interaction tracking for {conv_data['interaction_id']}")
-                                tracking_id = f"sso_tracking_{user_id}_{int(datetime.utcnow().timestamp())}"
-                                actions_table.put_item(Item={
-                                    'action_id': tracking_id,
-                                    'action_type': 'sso_interaction_tracking',
-                                    'interaction_id': conv_data['interaction_id'],
-                                    'interaction_timestamp': conv_data['timestamp'],
-                                    'user_email': user_email,
-                                    'group_name': matched_group,
-                                    'timestamp': int(datetime.utcnow().timestamp())
-                                })
-                                print(f"✅ Created tracking record: {tracking_id}")
-                            
-                            msg = f"✅ Your SSO group request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
-                            send_slack_message(channel, msg)
-                            
-                            if conv_data.get('interaction_id'):
-                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                msg = f"✅ Your SSO group request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                                send_slack_message(channel, msg)
+                                update_conversation(original_interaction_id, original_timestamp, msg, from_bot=True)
                             
                             return {'statusCode': 200, 'body': 'OK'}
                         else:
@@ -3906,6 +3919,8 @@ Need help with the form? Just ask!"""
                                 original_channel = details.get('channel', channel)
                                 original_interaction_id = details.get('interaction_id')
                                 original_timestamp = details.get('timestamp')
+                                
+                                print(f"DEBUG: Extracted from pending selection - interaction_id={original_interaction_id}, timestamp={original_timestamp}, channel={original_channel}")
                                 
                                 sso_request = {
                                     'user_email': user_email,
