@@ -485,30 +485,7 @@ def send_sop_list(channel):
     send_sop_slack_message(channel, message)
 
 def handle_user_selection(message, user_id, channel):
-    """Handle user selection from SOP list or pending group selection"""
-    
-    # FIRST: Check for pending group selection (SSO groups)
-    try:
-        real_name, user_email = get_user_info_from_slack(user_id)
-        if user_email:
-            pending_selection = check_pending_group_selection(user_email)
-            if pending_selection:
-                print(f"DEBUG - Found pending group selection for {user_email}")
-                details = pending_selection.get('details', {})
-                similar_groups = details.get('similar_groups', [])
-                
-                # Check if message matches one of the similar groups
-                for group in similar_groups:
-                    if group.lower() == message.strip().lower():
-                        print(f"DEBUG - Matched pending group: {group}")
-                        # This is a pending group selection - handle it in comprehensive system
-                        return False  # Let comprehensive system handle it
-                
-                print(f"DEBUG - Message doesn't match pending groups")
-    except Exception as e:
-        print(f"Error checking pending selection: {e}")
-    
-    # SECOND: Handle SOP DL selections
+    """Handle user selection from SOP list with deduplication"""
     user_email = "matthew.denecke@dairy.com"
     
     sop_options = [
