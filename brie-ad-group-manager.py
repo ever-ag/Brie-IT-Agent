@@ -311,7 +311,7 @@ try {{
                 print(f"⚠️ Failed to update conversation: {e}")
         
         # Check if this came from Slack - use message_id as fallback
-        slack_context = email_data.get('slackContext')
+        slack_context = email_data.get('slackContext') or event.get('slackContext')
         if not slack_context:
             # Fallback: check if message_id starts with 'slack_'
             message_id = email_data.get('messageId', '')
