@@ -3893,6 +3893,11 @@ Need help with the form? Just ask!"""
                                 # SSO Group handling
                                 lambda_client = boto3.client('lambda')
                                 
+                                # Get channel from pending selection details (original request)
+                                original_channel = details.get('channel', channel)
+                                original_interaction_id = details.get('interaction_id')
+                                original_timestamp = details.get('timestamp')
+                                
                                 sso_request = {
                                     'user_email': user_email,
                                     'group_name': selected_group,
@@ -3904,13 +3909,15 @@ Need help with the form? Just ask!"""
                                     "sender": user_email,
                                     "subject": f"SSO Group Request from Slack: {real_name}",
                                     "body": f"{action} me to {selected_group}",
-                                    "messageId": f"slack_{channel}_{slack_event.get('ts', '')}",
+                                    "messageId": f"slack_{original_channel}_{slack_event.get('ts', '')}",
                                     "source": "it-helpdesk-bot",
                                     "slackContext": {
-                                        "channel": channel,
+                                        "channel": original_channel,
                                         "thread_ts": slack_event.get('ts', ''),
                                         "user_name": real_name,
-                                        "user_id": user_id
+                                        "user_id": user_id,
+                                        "interaction_id": original_interaction_id,
+                                        "timestamp": original_timestamp
                                     }
                                 }
                                 
@@ -3961,8 +3968,8 @@ Need help with the form? Just ask!"""
                                         "callback_params": {
                                             "ssoGroupRequest": sso_request,
                                             "emailData": email_data,
-                                            "interaction_id": conv_data.get('interaction_id'),
-                                            "interaction_timestamp": conv_data.get('timestamp')
+                                            "interaction_id": original_interaction_id,
+                                            "interaction_timestamp": original_timestamp
                                         }
                                     })
                                 )
