@@ -3556,6 +3556,10 @@ def lambda_handler(event, context):
                             original_timestamp = pending['details'].get('timestamp')
                             original_channel = pending['details'].get('channel', channel)
                             
+                            # Convert Decimal to int for JSON serialization
+                            if original_timestamp:
+                                original_timestamp = int(original_timestamp)
+                            
                             print(f"DEBUG: Using original conversation - interaction_id={original_interaction_id}, timestamp={original_timestamp}")
                             
                             # Log user's selection to ORIGINAL conversation
