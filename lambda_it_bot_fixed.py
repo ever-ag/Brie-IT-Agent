@@ -287,41 +287,53 @@ def handle_sop_sso_request(message, user_id, channel):
         
         # Parse the extracted data
         extracted_data = json.loads(extract_result['body'])
+        group_name = extracted_data['group_name']
         
-        # Check membership BEFORE creating approval
-        membership_status = check_membership(extracted_data['user_email'], extracted_data['group_name'])
+        # VALIDATE GROUP EXISTS BEFORE CREATING APPROVAL
+        print(f"🔍 Validating group '{group_name}' exists in AD...")
+        validation = validate_sso_group(group_name)
         
-        if membership_status == "ALREADY_MEMBER":
-            msg = f"ℹ️ You're already a member of **{extracted_data['group_name']}**.\\n\\nNo changes needed!"
-            if channel:
+        if not validation['exists']:
+            similar = validation.get('similar_groups', [])
+            if similar:
+                print(f"❌ Group not found. Found {len(similar)} similar groups")
+                print(f"DEBUG: interaction_id={interaction_id}, timestamp={timestamp}")
+                # Store pending selection
+                actions_table = dynamodb.Table('it-actions')
+                actions_table.put_item(Item={
+                    'action_id': f"pending_{user_id}_{int(time.time())}",
+                    'action_type': 'pending_group_selection',
+                    'details': {
+                        'user_email': extracted_data['user_email'],
+                        'original_group_name': group_name,
+                        'similar_groups': similar,
+                        'action': extracted_data['action'],
+                        'requester': extracted_data['requester_email'],
+                        'channel': channel,
+                        'user_id': user_id,
+                        'interaction_id': interaction_id,
+                        'timestamp': timestamp,
+                        'type': 'SSO_GROUP'
+                    },
+                    'requester': extracted_data['requester_email'],
+                    'status': 'PENDING_SELECTION',
+                    'created_at': datetime.utcnow().isoformat()
+                })
+                
+                msg = f"❓ **Group Not Found**\n\nI couldn't find a group named **{group_name}**.\n\nDid you mean one of these?\n\n" + "\n".join([f"• {g}" for g in similar[:10]]) + "\n\nPlease reply with the exact group name."
                 send_slack_message(channel, msg)
-                track_user_message(user_id, msg, is_bot_response=True)
-            # Update conversation with outcome
-            try:
-                interactions_table.update_item(
-                    Key={'interaction_id': interaction_id},
-                    UpdateExpression='SET outcome = :outcome',
-                    ExpressionAttributeValues={
-                        ':outcome': 'Already a member - no action needed'
-                    }
-                )
-            except Exception as update_error:
-                print(f"Warning: Could not update conversation outcome: {update_error}")
-            return {'statusCode': 200, 'body': 'Already a member'}
-        elif membership_status == "USER_NOT_FOUND":
-            msg = "❌ Could not find your account in Active Directory. Please contact IT."
-            if channel:
+                update_conversation(interaction_id, timestamp, msg, 'bot')
+                
+                return {'statusCode': 200, 'body': 'Pending group selection'}
+            else:
+                msg = f"❌ **Group Not Found**\n\nI couldn't find any groups matching **{group_name}**.\n\nPlease contact IT for assistance."
                 send_slack_message(channel, msg)
-                track_user_message(user_id, msg, is_bot_response=True)
-            return {'statusCode': 400, 'body': 'User not found'}
-        elif membership_status == "GROUP_NOT_FOUND":
-            msg = f"❌ Group **{extracted_data['group_name']}** not found in Active Directory."
-            if channel:
-                send_slack_message(channel, msg)
-                track_user_message(user_id, msg, is_bot_response=True)
-            return {'statusCode': 400, 'body': 'Group not found'}
-        elif membership_status == "ERROR":
-            print(f"⚠️ Membership check failed, proceeding with approval (fail open)")
+                update_conversation(interaction_id, timestamp, msg, 'bot')
+                return {'statusCode': 400, 'body': 'Group not found'}
+        
+        print(f"✅ Group validated: {validation.get('group_name', group_name)}")
+        # Use validated group name
+        extracted_data['group_name'] = validation.get('group_name', group_name)
         
         # Create email data for approval system
         email_data = {
@@ -334,8 +346,10 @@ def handle_sop_sso_request(message, user_id, channel):
                 "channel": channel,
                 "thread_ts": str(int(time.time())),
                 "user_name": user_name,
-                "user_id": user_id
-            }
+                "user_id": user_id,
+                "timestamp": timestamp
+            },
+            "interaction_id": interaction_id
         }
         
         # Create the request details
@@ -1868,7 +1882,87 @@ def get_user_info_from_slack(user_id):
         print(f"Error getting user info: {e}")
         return None, None
 
-def trigger_automation_workflow(user_email, user_name, message, channel, thread_ts, automation_type, user_id=None, interaction_id=None):
+def validate_sso_group(group_name):
+    """Validate if SSO group exists in AD, return similar groups if not found"""
+    try:
+        ssm = boto3.client('ssm')
+        BESPIN_INSTANCE_ID = "i-0dca7766c8de43f08"
+        
+        ps_script = f"""
+$ErrorActionPreference = "Stop"
+try {{
+    $group = Get-ADGroup -Filter "Name -eq '{group_name}'"
+    if ($group) {{
+        Write-Output "FOUND: $($group.Name)"
+    }} else {{
+        Write-Output "NOT_FOUND"
+    }}
+}} catch {{
+    Write-Output "ERROR: $_"
+}}
+"""
+        response = ssm.send_command(
+            InstanceIds=[BESPIN_INSTANCE_ID],
+            DocumentName='AWS-RunPowerShellScript',
+            Parameters={'commands': [ps_script]},
+            TimeoutSeconds=30
+        )
+        
+        command_id = response['Command']['CommandId']
+        
+        for _ in range(10):
+            time.sleep(2)
+            result = ssm.get_command_invocation(
+                CommandId=command_id,
+                InstanceId=BESPIN_INSTANCE_ID
+            )
+            if result['Status'] in ['Success', 'Failed']:
+                break
+        
+        output = result.get('StandardOutputContent', '').strip()
+        
+        if 'FOUND:' in output:
+            return {'exists': True, 'group_name': output.replace('FOUND:', '').strip()}
+        
+        # Group not found, search for similar
+        search_term = group_name.split()[0] if ' ' in group_name else group_name
+        ps_search = f"""
+$ErrorActionPreference = "Stop"
+try {{
+    $groups = Get-ADGroup -Filter "Name -like '*{search_term}*'" | Select-Object -First 10 Name
+    $groups | ForEach-Object {{ Write-Output $_.Name }}
+}} catch {{
+    Write-Output "ERROR: $_"
+}}
+"""
+        response = ssm.send_command(
+            InstanceIds=[BESPIN_INSTANCE_ID],
+            DocumentName='AWS-RunPowerShellScript',
+            Parameters={'commands': [ps_search]},
+            TimeoutSeconds=30
+        )
+        
+        command_id = response['Command']['CommandId']
+        
+        for _ in range(10):
+            time.sleep(2)
+            result = ssm.get_command_invocation(
+                CommandId=command_id,
+                InstanceId=BESPIN_INSTANCE_ID
+            )
+            if result['Status'] in ['Success', 'Failed']:
+                break
+        
+        output = result.get('StandardOutputContent', '').strip()
+        similar = [line.strip() for line in output.split('\n') if line.strip() and 'ERROR:' not in line]
+        
+        return {'exists': False, 'similar_groups': similar}
+        
+    except Exception as e:
+        print(f"Error validating group: {e}")
+        return {'exists': False, 'similar_groups': [], 'error': str(e)}
+
+def trigger_automation_workflow(user_email, user_name, message, channel, thread_ts, automation_type, user_id=None, interaction_id=None, timestamp=None):
     """Trigger full automation workflow with AI processing"""
     try:
         import re
@@ -1890,7 +1984,8 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                 "channel": channel,
                 "thread_ts": thread_ts,
                 "user_name": user_name,
-                "user_id": user_id
+                "user_id": user_id,
+                "timestamp": timestamp
             },
             "interaction_id": interaction_id  # Pass conversation ID
         }
@@ -1910,11 +2005,56 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
         
         # Parse the extracted data
         extracted_data = json.loads(extract_result['body'])
+        group_name = extracted_data['group_name']
+        
+        # VALIDATE GROUP EXISTS BEFORE CREATING APPROVAL
+        print(f"🔍 Validating group '{group_name}' exists in AD...")
+        validation = validate_sso_group(group_name)
+        
+        if not validation['exists']:
+            similar = validation.get('similar_groups', [])
+            if similar:
+                print(f"❌ Group not found. Found {len(similar)} similar groups")
+                # Store pending selection
+                dynamodb_client = boto3.resource('dynamodb')
+                actions_table = dynamodb_client.Table('it-actions')
+                actions_table.put_item(Item={
+                    'action_id': f"pending_{user_id}_{int(time.time())}",
+                    'action_type': 'pending_group_selection',
+                    'details': {
+                        'user_email': extracted_data['user_email'],
+                        'original_group_name': group_name,
+                        'similar_groups': similar,
+                        'action': extracted_data['action'],
+                        'requester': extracted_data['requester_email'],
+                        'channel': channel,
+                        'user_id': user_id,
+                        'interaction_id': interaction_id,
+                        'timestamp': timestamp,
+                        'type': 'SSO_GROUP'
+                    },
+                    'requester': user_email,
+                    'status': 'PENDING_SELECTION',
+                    'created_at': datetime.utcnow().isoformat()
+                })
+                
+                msg = f"❓ **Group Not Found**\n\nI couldn't find a group named **{group_name}**.\n\nDid you mean one of these?\n\n" + "\n".join([f"• {g}" for g in similar[:10]]) + "\n\nPlease reply with the exact group name."
+                send_slack_message(channel, msg)
+                update_conversation(interaction_id, timestamp, msg, 'bot')
+                
+                return {'success': False, 'pending_selection': True, 'message': msg}
+            else:
+                msg = f"❌ **Group Not Found**\n\nI couldn't find any groups matching **{group_name}**.\n\nPlease contact IT for assistance."
+                send_slack_message(channel, msg)
+                update_conversation(interaction_id, timestamp, msg, 'bot')
+                return {'success': False, 'message': msg}
+        
+        print(f"✅ Group validated: {validation.get('group_name', group_name)}")
         
         # Create the request details in the format expected by it-approval-system
         request_details = {
             'user_email': extracted_data['user_email'],
-            'group_name': extracted_data['group_name'],
+            'group_name': validation.get('group_name', group_name),  # Use validated name
             'action': extracted_data['action'],
             'requester': extracted_data['requester_email']
         }
@@ -3411,8 +3551,28 @@ def lambda_handler(event, context):
                         print(f"DEBUG: Matched group: {matched_group}")
                         
                         if matched_group:
+                            # Get original conversation ID from pending selection
+                            original_interaction_id = pending['details'].get('interaction_id')
+                            original_timestamp = pending['details'].get('timestamp')
+                            original_channel = pending['details'].get('channel', channel)
+                            
+                            # Convert Decimal to int for JSON serialization
+                            if original_timestamp:
+                                original_timestamp = int(original_timestamp)
+                            
+                            print(f"DEBUG: Using original conversation - interaction_id={original_interaction_id}, timestamp={original_timestamp}")
+                            
+                            # Log user's selection to ORIGINAL conversation
+                            if original_interaction_id:
+                                update_conversation(original_interaction_id, original_timestamp, message, from_bot=False)
+                            
                             # User selected a valid group
-                            send_slack_message(channel, f"✅ Got it! Processing your request for **{matched_group}**...")
+                            msg = f"✅ Got it! Processing your request for **{matched_group}**..."
+                            send_slack_message(channel, msg)
+                            
+                            # Log to ORIGINAL conversation
+                            if original_interaction_id:
+                                update_conversation(original_interaction_id, original_timestamp, msg, from_bot=True)
                             
                             # Delete pending selection
                             actions_table.delete_item(Key={'action_id': pending['action_id']})
@@ -3422,17 +3582,16 @@ def lambda_handler(event, context):
                             
                             if request_type == 'DISTRIBUTION_LIST':
                                 # Handle DL request
-                                conv_data = user_interaction_ids.get(user_id, {})
-                                approval_id = send_approval_request(user_id, user_name, user_email, matched_group, f"add me to {matched_group}", conv_data)
+                                approval_id = send_approval_request(user_id, user_name, user_email, matched_group, f"add me to {matched_group}", {'interaction_id': original_interaction_id, 'timestamp': original_timestamp})
                                 
-                                if conv_data.get('interaction_id'):
-                                    mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                if original_interaction_id:
+                                    mark_conversation_awaiting_approval(original_interaction_id, original_timestamp)
                                 
                                 msg = f"✅ Your request for **{matched_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                                 send_slack_message(channel, msg)
                                 
-                                if conv_data.get('interaction_id'):
-                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                if original_interaction_id:
+                                    update_conversation(original_interaction_id, original_timestamp, msg, from_bot=True)
                                 
                                 return {'statusCode': 200, 'body': 'OK'}
                             
@@ -3450,9 +3609,26 @@ def lambda_handler(event, context):
                                 'sender': user_email,
                                 'subject': f'SSO Group Access Request: {matched_group}',
                                 'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
-                                'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
-                                'source': 'it-helpdesk-bot'
+                                'messageId': f'slack_{original_channel}_{int(datetime.utcnow().timestamp())}',
+                                'source': 'it-helpdesk-bot',
+                                'slackContext': {
+                                    'channel': original_channel,
+                                    'user_name': user_name,
+                                    'user_id': user_id
+                                }
                             }
+                            
+                            # Store interaction tracking
+                            if original_interaction_id:
+                                actions_table.put_item(Item={
+                                    'action_id': f"sso_tracking_{user_id}_{int(datetime.now().timestamp())}",
+                                    'action_type': 'sso_interaction_tracking',
+                                    'interaction_id': original_interaction_id,
+                                    'interaction_timestamp': original_timestamp,
+                                    'user_email': user_email,
+                                    'group_name': matched_group,
+                                    'timestamp': int(datetime.now().timestamp())
+                                })
                             
                             approval_response = lambda_client.invoke(
                                 FunctionName='it-approval-system',
@@ -3467,35 +3643,20 @@ def lambda_handler(event, context):
                                     "callback_function": "brie-ad-group-manager",
                                     "callback_params": {
                                         "ssoGroupRequest": request_details,
-                                        "emailData": email_data
+                                        "emailData": email_data,
+                                        "interaction_id": original_interaction_id,
+                                        "interaction_timestamp": original_timestamp
                                     }
                                 })
                             )
                             
-                            # Mark conversation as awaiting approval
-                            conv_data = user_interaction_ids.get(user_id, {})
-                            if conv_data.get('interaction_id'):
-                                mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                            # Mark ORIGINAL conversation as awaiting approval
+                            if original_interaction_id:
+                                mark_conversation_awaiting_approval(original_interaction_id, original_timestamp)
                                 
-                                # Create SSO interaction tracking for callback
-                                print(f"📝 Creating SSO interaction tracking for {conv_data['interaction_id']}")
-                                tracking_id = f"sso_tracking_{user_id}_{int(datetime.utcnow().timestamp())}"
-                                actions_table.put_item(Item={
-                                    'action_id': tracking_id,
-                                    'action_type': 'sso_interaction_tracking',
-                                    'interaction_id': conv_data['interaction_id'],
-                                    'interaction_timestamp': conv_data['timestamp'],
-                                    'user_email': user_email,
-                                    'group_name': matched_group,
-                                    'timestamp': int(datetime.utcnow().timestamp())
-                                })
-                                print(f"✅ Created tracking record: {tracking_id}")
-                            
-                            msg = f"✅ Your SSO group request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
-                            send_slack_message(channel, msg)
-                            
-                            if conv_data.get('interaction_id'):
-                                update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                msg = f"✅ Your SSO group request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                                send_slack_message(channel, msg)
+                                update_conversation(original_interaction_id, original_timestamp, msg, from_bot=True)
                             
                             return {'statusCode': 200, 'body': 'OK'}
                         else:
@@ -3714,12 +3875,16 @@ Need help with the form? Just ask!"""
                                     break
                             
                             if selected_group:
+                                # Log user's selection to conversation history
+                                conv_data = user_interaction_ids.get(user_id, {})
+                                if conv_data.get('interaction_id'):
+                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], message, from_bot=False)
+                                
                                 # User selected a valid group
                                 msg = f"✅ Got it! Requesting access to **{selected_group}**..."
                                 send_slack_message(channel, msg)
                                 
                                 # Log to conversation history
-                                conv_data = user_interaction_ids.get(user_id, {})
                                 if conv_data.get('interaction_id'):
                                     update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                                 
@@ -3754,6 +3919,13 @@ Need help with the form? Just ask!"""
                                 # SSO Group handling
                                 lambda_client = boto3.client('lambda')
                                 
+                                # Get channel from pending selection details (original request)
+                                original_channel = details.get('channel', channel)
+                                original_interaction_id = details.get('interaction_id')
+                                original_timestamp = details.get('timestamp')
+                                
+                                print(f"DEBUG: Extracted from pending selection - interaction_id={original_interaction_id}, timestamp={original_timestamp}, channel={original_channel}")
+                                
                                 sso_request = {
                                     'user_email': user_email,
                                     'group_name': selected_group,
@@ -3765,13 +3937,15 @@ Need help with the form? Just ask!"""
                                     "sender": user_email,
                                     "subject": f"SSO Group Request from Slack: {real_name}",
                                     "body": f"{action} me to {selected_group}",
-                                    "messageId": f"slack_{channel}_{slack_event.get('ts', '')}",
+                                    "messageId": f"slack_{original_channel}_{slack_event.get('ts', '')}",
                                     "source": "it-helpdesk-bot",
                                     "slackContext": {
-                                        "channel": channel,
+                                        "channel": original_channel,
                                         "thread_ts": slack_event.get('ts', ''),
                                         "user_name": real_name,
-                                        "user_id": user_id
+                                        "user_id": user_id,
+                                        "interaction_id": original_interaction_id,
+                                        "timestamp": original_timestamp
                                     }
                                 }
                                 
@@ -3822,28 +3996,28 @@ Need help with the form? Just ask!"""
                                         "callback_params": {
                                             "ssoGroupRequest": sso_request,
                                             "emailData": email_data,
-                                            "interaction_id": conv_data.get('interaction_id'),
-                                            "interaction_timestamp": conv_data.get('timestamp')
+                                            "interaction_id": original_interaction_id,
+                                            "interaction_timestamp": original_timestamp
                                         }
                                     })
                                 )
                                 
                                 # Mark conversation as awaiting approval
-                                if conv_data.get('interaction_id'):
+                                if original_interaction_id:
                                     print(f"🔵 SSO PATH: Marking conversation as awaiting approval")
-                                    mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                    mark_conversation_awaiting_approval(original_interaction_id, original_timestamp)
                                 
                                 msg = f"✅ Your request for **{selected_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                                 print(f"🔵 SSO PATH: Sending approval message to Slack")
                                 send_slack_message(channel, msg)
                                 
                                 # Log to conversation history
-                                if conv_data.get('interaction_id'):
-                                    print(f"📝 Adding approval message to conversation history: {conv_data['interaction_id']}")
-                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                if original_interaction_id:
+                                    print(f"📝 Adding approval message to conversation history: {original_interaction_id}")
+                                    update_conversation(original_interaction_id, original_timestamp, msg, from_bot=True)
                                     print(f"✅ Approval message added to conversation history")
                                 else:
-                                    print(f"⚠️ No interaction_id found in conv_data for SSO approval message")
+                                    print(f"⚠️ No interaction_id found in pending selection for SSO approval message")
                                 
                                 return {'statusCode': 200, 'body': 'OK'}
                             else:
@@ -3900,7 +4074,8 @@ Need help with the form? Just ask!"""
                             slack_event.get('ts', ''),
                             automation_type,
                             user_id,
-                            interaction_id  # Pass conversation ID
+                            interaction_id,  # Pass conversation ID
+                            timestamp  # Pass timestamp for conversation logging
                         )
                         
                         if execution_arn == 'PENDING_SELECTION':
