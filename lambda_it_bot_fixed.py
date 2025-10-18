@@ -287,6 +287,52 @@ def handle_sop_sso_request(message, user_id, channel):
         
         # Parse the extracted data
         extracted_data = json.loads(extract_result['body'])
+        group_name = extracted_data['group_name']
+        
+        # VALIDATE GROUP EXISTS BEFORE CREATING APPROVAL
+        print(f"🔍 Validating group '{group_name}' exists in AD...")
+        validation = validate_sso_group(group_name)
+        
+        if not validation['exists']:
+            similar = validation.get('similar_groups', [])
+            if similar:
+                print(f"❌ Group not found. Found {len(similar)} similar groups")
+                # Store pending selection
+                actions_table = dynamodb.Table('it-actions')
+                actions_table.put_item(Item={
+                    'action_id': f"pending_{user_id}_{int(time.time())}",
+                    'action_type': 'pending_group_selection',
+                    'details': {
+                        'user_email': extracted_data['user_email'],
+                        'original_group_name': group_name,
+                        'similar_groups': similar,
+                        'action': extracted_data['action'],
+                        'requester': extracted_data['requester_email'],
+                        'channel': channel,
+                        'user_id': user_id,
+                        'interaction_id': interaction_id,
+                        'timestamp': timestamp,
+                        'type': 'SSO_GROUP'
+                    },
+                    'requester': extracted_data['requester_email'],
+                    'status': 'PENDING_SELECTION',
+                    'created_at': datetime.utcnow().isoformat()
+                })
+                
+                msg = f"❓ **Group Not Found**\n\nI couldn't find a group named **{group_name}**.\n\nDid you mean one of these?\n\n" + "\n".join([f"• {g}" for g in similar[:10]]) + "\n\nPlease reply with the exact group name."
+                send_slack_message(channel, msg)
+                update_conversation(interaction_id, timestamp, msg, 'bot')
+                
+                return {'statusCode': 200, 'body': 'Pending group selection'}
+            else:
+                msg = f"❌ **Group Not Found**\n\nI couldn't find any groups matching **{group_name}**.\n\nPlease contact IT for assistance."
+                send_slack_message(channel, msg)
+                update_conversation(interaction_id, timestamp, msg, 'bot')
+                return {'statusCode': 400, 'body': 'Group not found'}
+        
+        print(f"✅ Group validated: {validation.get('group_name', group_name)}")
+        # Use validated group name
+        extracted_data['group_name'] = validation.get('group_name', group_name)
         
         # Create email data for approval system
         email_data = {
@@ -1835,6 +1881,86 @@ def get_user_info_from_slack(user_id):
         print(f"Error getting user info: {e}")
         return None, None
 
+def validate_sso_group(group_name):
+    """Validate if SSO group exists in AD, return similar groups if not found"""
+    try:
+        ssm = boto3.client('ssm')
+        BESPIN_INSTANCE_ID = "i-0dca7766c8de43f08"
+        
+        ps_script = f"""
+$ErrorActionPreference = "Stop"
+try {{
+    $group = Get-ADGroup -Filter "Name -eq '{group_name}'"
+    if ($group) {{
+        Write-Output "FOUND: $($group.Name)"
+    }} else {{
+        Write-Output "NOT_FOUND"
+    }}
+}} catch {{
+    Write-Output "ERROR: $_"
+}}
+"""
+        response = ssm.send_command(
+            InstanceIds=[BESPIN_INSTANCE_ID],
+            DocumentName='AWS-RunPowerShellScript',
+            Parameters={'commands': [ps_script]},
+            TimeoutSeconds=30
+        )
+        
+        command_id = response['Command']['CommandId']
+        
+        for _ in range(10):
+            time.sleep(2)
+            result = ssm.get_command_invocation(
+                CommandId=command_id,
+                InstanceId=BESPIN_INSTANCE_ID
+            )
+            if result['Status'] in ['Success', 'Failed']:
+                break
+        
+        output = result.get('StandardOutputContent', '').strip()
+        
+        if 'FOUND:' in output:
+            return {'exists': True, 'group_name': output.replace('FOUND:', '').strip()}
+        
+        # Group not found, search for similar
+        search_term = group_name.split()[0] if ' ' in group_name else group_name
+        ps_search = f"""
+$ErrorActionPreference = "Stop"
+try {{
+    $groups = Get-ADGroup -Filter "Name -like '*{search_term}*'" | Select-Object -First 10 Name
+    $groups | ForEach-Object {{ Write-Output $_.Name }}
+}} catch {{
+    Write-Output "ERROR: $_"
+}}
+"""
+        response = ssm.send_command(
+            InstanceIds=[BESPIN_INSTANCE_ID],
+            DocumentName='AWS-RunPowerShellScript',
+            Parameters={'commands': [ps_search]},
+            TimeoutSeconds=30
+        )
+        
+        command_id = response['Command']['CommandId']
+        
+        for _ in range(10):
+            time.sleep(2)
+            result = ssm.get_command_invocation(
+                CommandId=command_id,
+                InstanceId=BESPIN_INSTANCE_ID
+            )
+            if result['Status'] in ['Success', 'Failed']:
+                break
+        
+        output = result.get('StandardOutputContent', '').strip()
+        similar = [line.strip() for line in output.split('\n') if line.strip() and 'ERROR:' not in line]
+        
+        return {'exists': False, 'similar_groups': similar}
+        
+    except Exception as e:
+        print(f"Error validating group: {e}")
+        return {'exists': False, 'similar_groups': [], 'error': str(e)}
+
 def trigger_automation_workflow(user_email, user_name, message, channel, thread_ts, automation_type, user_id=None, interaction_id=None, timestamp=None):
     """Trigger full automation workflow with AI processing"""
     try:
@@ -1878,11 +2004,56 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
         
         # Parse the extracted data
         extracted_data = json.loads(extract_result['body'])
+        group_name = extracted_data['group_name']
+        
+        # VALIDATE GROUP EXISTS BEFORE CREATING APPROVAL
+        print(f"🔍 Validating group '{group_name}' exists in AD...")
+        validation = validate_sso_group(group_name)
+        
+        if not validation['exists']:
+            similar = validation.get('similar_groups', [])
+            if similar:
+                print(f"❌ Group not found. Found {len(similar)} similar groups")
+                # Store pending selection
+                dynamodb_client = boto3.resource('dynamodb')
+                actions_table = dynamodb_client.Table('it-actions')
+                actions_table.put_item(Item={
+                    'action_id': f"pending_{user_id}_{int(time.time())}",
+                    'action_type': 'pending_group_selection',
+                    'details': {
+                        'user_email': extracted_data['user_email'],
+                        'original_group_name': group_name,
+                        'similar_groups': similar,
+                        'action': extracted_data['action'],
+                        'requester': extracted_data['requester_email'],
+                        'channel': channel,
+                        'user_id': user_id,
+                        'interaction_id': interaction_id,
+                        'timestamp': timestamp,
+                        'type': 'SSO_GROUP'
+                    },
+                    'requester': user_email,
+                    'status': 'PENDING_SELECTION',
+                    'created_at': datetime.utcnow().isoformat()
+                })
+                
+                msg = f"❓ **Group Not Found**\n\nI couldn't find a group named **{group_name}**.\n\nDid you mean one of these?\n\n" + "\n".join([f"• {g}" for g in similar[:10]]) + "\n\nPlease reply with the exact group name."
+                send_slack_message(channel, msg)
+                update_conversation(interaction_id, timestamp, msg, 'bot')
+                
+                return {'success': False, 'pending_selection': True, 'message': msg}
+            else:
+                msg = f"❌ **Group Not Found**\n\nI couldn't find any groups matching **{group_name}**.\n\nPlease contact IT for assistance."
+                send_slack_message(channel, msg)
+                update_conversation(interaction_id, timestamp, msg, 'bot')
+                return {'success': False, 'message': msg}
+        
+        print(f"✅ Group validated: {validation.get('group_name', group_name)}")
         
         # Create the request details in the format expected by it-approval-system
         request_details = {
             'user_email': extracted_data['user_email'],
-            'group_name': extracted_data['group_name'],
+            'group_name': validation.get('group_name', group_name),  # Use validated name
             'action': extracted_data['action'],
             'requester': extracted_data['requester_email']
         }
