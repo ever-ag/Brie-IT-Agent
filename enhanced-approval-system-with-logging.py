@@ -408,6 +408,10 @@ def send_slack_approval(approval_data):
     
     approval_id = approval_data['approval_id']
     
+    # Log IT channel message to conversation
+    it_msg = f"🚨 IT Automation Approval Request sent to IT channel\nType: {approval_data.get('request_type')}\nDetails: {approval_data.get('details')}"
+    log_to_conversation(approval_data.get('interaction_id'), approval_data.get('timestamp'), it_msg, from_bot=True)
+    
     blocks = [
         {
             "type": "section",
@@ -470,6 +474,11 @@ def send_slack_confirmation(approval_data, approved):
     
     status = "✅ approved" if approved else "❌ denied"
     message = f"{status} this request"
+    
+    # Log IT decision to conversation
+    approver = approval_data.get('approver', 'IT')
+    decision_msg = f"IT Staff ({approver}) {status} the request in IT channel"
+    log_to_conversation(approval_data.get('interaction_id'), approval_data.get('timestamp'), decision_msg, from_bot=True)
     
     payload = {
         'channel': 'C09KB40PL9J',

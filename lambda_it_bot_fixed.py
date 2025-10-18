@@ -299,8 +299,10 @@ def handle_sop_sso_request(message, user_id, channel):
                 "channel": channel,
                 "thread_ts": str(int(time.time())),
                 "user_name": user_name,
-                "user_id": user_id
-            }
+                "user_id": user_id,
+                "timestamp": timestamp
+            },
+            "interaction_id": interaction_id
         }
         
         # Create the request details
