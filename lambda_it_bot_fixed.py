@@ -3858,12 +3858,16 @@ Need help with the form? Just ask!"""
                                     break
                             
                             if selected_group:
+                                # Log user's selection to conversation history
+                                conv_data = user_interaction_ids.get(user_id, {})
+                                if conv_data.get('interaction_id'):
+                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], message, from_user=True)
+                                
                                 # User selected a valid group
                                 msg = f"✅ Got it! Requesting access to **{selected_group}**..."
                                 send_slack_message(channel, msg)
                                 
                                 # Log to conversation history
-                                conv_data = user_interaction_ids.get(user_id, {})
                                 if conv_data.get('interaction_id'):
                                     update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
                                 
@@ -3980,21 +3984,21 @@ Need help with the form? Just ask!"""
                                 )
                                 
                                 # Mark conversation as awaiting approval
-                                if conv_data.get('interaction_id'):
+                                if original_interaction_id:
                                     print(f"🔵 SSO PATH: Marking conversation as awaiting approval")
-                                    mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
+                                    mark_conversation_awaiting_approval(original_interaction_id, original_timestamp)
                                 
                                 msg = f"✅ Your request for **{selected_group}** is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                                 print(f"🔵 SSO PATH: Sending approval message to Slack")
                                 send_slack_message(channel, msg)
                                 
                                 # Log to conversation history
-                                if conv_data.get('interaction_id'):
-                                    print(f"📝 Adding approval message to conversation history: {conv_data['interaction_id']}")
-                                    update_conversation(conv_data['interaction_id'], conv_data['timestamp'], msg, from_bot=True)
+                                if original_interaction_id:
+                                    print(f"📝 Adding approval message to conversation history: {original_interaction_id}")
+                                    update_conversation(original_interaction_id, original_timestamp, msg, from_bot=True)
                                     print(f"✅ Approval message added to conversation history")
                                 else:
-                                    print(f"⚠️ No interaction_id found in conv_data for SSO approval message")
+                                    print(f"⚠️ No interaction_id found in pending selection for SSO approval message")
                                 
                                 return {'statusCode': 200, 'body': 'OK'}
                             else:
