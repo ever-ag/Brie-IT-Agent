@@ -768,11 +768,13 @@ Disconnect-ExchangeOnline -Confirm:$false
         ssm = boto3.client('ssm')
         BESPIN_INSTANCE_ID = "i-0dca7766c8de43f08"
         
-        # First check if user already has access
+        # First check if user already has access - using certificate auth
         check_script = f"""
-$SecurePassword = ConvertTo-SecureString 'Zasa345270Zasa345270' -AsPlainText -Force
-$Credential = New-Object System.Management.Automation.PSCredential ('svc-exchange-automation@ever.ag', $SecurePassword)
-Connect-ExchangeOnline -Credential $Credential -ShowBanner:$false
+$AppId = 'c33fc45c-9313-4f45-ac31-baf568616137'
+$Organization = 'ever.ag'
+$CertificateThumbprint = '5A9D9A9076B309B70828EBB3C9AE57496DB68421'
+
+Connect-ExchangeOnline -AppId $AppId -CertificateThumbprint $CertificateThumbprint -Organization $Organization -ShowBanner:$false
 $perms = Get-MailboxPermission -Identity '{mailbox_email}' | Where-Object {{$_.User -like '*{user_email}*' -and $_.AccessRights -contains 'FullAccess'}}
 if ($perms) {{
     Write-Host 'ALREADY_HAS_ACCESS'
@@ -824,12 +826,14 @@ Disconnect-ExchangeOnline -Confirm:$false
                     })
                 }
             
-            # User doesn't have access, add them
+            # User doesn't have access, add them - using certificate auth
             print(f"➕ Adding {user_email} to {mailbox_email}")
             add_script = f"""
-$SecurePassword = ConvertTo-SecureString 'Zasa345270Zasa345270' -AsPlainText -Force
-$Credential = New-Object System.Management.Automation.PSCredential ('svc-exchange-automation@ever.ag', $SecurePassword)
-Connect-ExchangeOnline -Credential $Credential -ShowBanner:$false
+$AppId = 'c33fc45c-9313-4f45-ac31-baf568616137'
+$Organization = 'ever.ag'
+$CertificateThumbprint = '5A9D9A9076B309B70828EBB3C9AE57496DB68421'
+
+Connect-ExchangeOnline -AppId $AppId -CertificateThumbprint $CertificateThumbprint -Organization $Organization -ShowBanner:$false
 Add-MailboxPermission -Identity '{mailbox_email}' -User '{user_email}' -AccessRights FullAccess -InheritanceType All -AutoMapping $true
 Disconnect-ExchangeOnline -Confirm:$false
 """
@@ -933,11 +937,12 @@ Disconnect-ExchangeOnline -Confirm:$false
             mailbox_email = params.get('mailbox_email')
             email_details = params.get('email_details', {})
             
-            # Call the existing shared mailbox handler
+            # Call the existing shared mailbox handler with email_details
             result = lambda_handler({
                 'action': 'add_user_to_shared_mailbox',
                 'user_email': user_email,
-                'mailbox_email': mailbox_email
+                'mailbox_email': mailbox_email,
+                'email_details': email_details
             }, None)
             
             # Parse result and send callback to it-helpdesk-bot
