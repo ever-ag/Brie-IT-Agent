@@ -862,6 +862,28 @@ Disconnect-ExchangeOnline -Confirm:$false
                 if attempt < 5:
                     time.sleep(5)
             
+            # Send callback for failure
+            if 'email_details' in event:
+                try:
+                    lambda_client = boto3.client('lambda')
+                    slack_context = event.get('email_details', {}).get('slackContext', {})
+                    if slack_context.get('user_id'):
+                        lambda_client.invoke(
+                            FunctionName='it-helpdesk-bot',
+                            InvocationType='Event',
+                            Payload=json.dumps({
+                                'callback_result': False,
+                                'result_data': {
+                                    'slackContext': slack_context,
+                                    'message': f"❌ **Request Failed**\n\nFailed to add you to {mailbox_email}. Please contact IT.",
+                                    'status': 'failed',
+                                    'mailbox_email': mailbox_email,
+                                    'user_email': user_email
+                                }
+                            })
+                        )
+                except: pass
+            
             return {
                 'statusCode': 200,
                 'body': json.dumps({
@@ -871,6 +893,28 @@ Disconnect-ExchangeOnline -Confirm:$false
             }
             
         except Exception as e:
+            # Send callback for exception
+            if 'email_details' in event:
+                try:
+                    lambda_client = boto3.client('lambda')
+                    slack_context = event.get('email_details', {}).get('slackContext', {})
+                    if slack_context.get('user_id'):
+                        lambda_client.invoke(
+                            FunctionName='it-helpdesk-bot',
+                            InvocationType='Event',
+                            Payload=json.dumps({
+                                'callback_result': False,
+                                'result_data': {
+                                    'slackContext': slack_context,
+                                    'message': f"❌ **Request Failed**\n\nError: {str(e)}",
+                                    'status': 'failed',
+                                    'mailbox_email': mailbox_email,
+                                    'user_email': user_email
+                                }
+                            })
+                        )
+                except: pass
+            
             return {
                 'statusCode': 200,
                 'body': json.dumps({
