@@ -1492,8 +1492,14 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                 target_user = user_match.group(1).strip()
                 target_group = group_match.group(1).strip()
                 
+                # If user says "me", use their actual email
+                if target_user.lower() == 'me':
+                    target_email = user_email
+                else:
+                    target_email = f"{target_user.lower().replace(' ', '.')}@ever.ag"
+                
                 request_details = {
-                    'user_email': f"{target_user.lower().replace(' ', '.')}@ever.ag",
+                    'user_email': target_email,
                     'group_name': target_group,
                     'action': 'add',
                     'requester': user_email
@@ -2124,36 +2130,24 @@ def lambda_handler(event, context):
                     )
                     print(f"✅ Updated interaction {interaction_id} with approval status: {status}")
                     
-                    # Get approval record to retrieve channel and thread_ts
-                    try:
-                        approvals_table = dynamodb.Table('it-approvals')
-                        approval_response = approvals_table.get_item(Key={'approval_id': approval_id})
-                        if 'Item' in approval_response:
-                            callback_params = approval_response['Item'].get('callback_params', {})
-                            channel = callback_params.get('channel')
-                            thread_ts = callback_params.get('thread_ts')
-                            
-                            if channel:
-                                # Send approval notification (not in thread)
-                                approval_msg = f"✅ Approval {approval_id} {status} by {approver}"
-                                send_slack_message(channel, approval_msg)
-                                update_conversation(conv['interaction_id'], conv['timestamp'], approval_msg, from_bot=True)
-                                print(f"📤 Sent approval notification to Slack")
-                                
-                                # Send result notification (not in thread)
-                                if 'Failed' in result_message or 'failed' in result_message.lower():
-                                    result_msg = f"❌ {result_message}"
-                                elif 'already' in result_message.lower():
-                                    result_msg = f"ℹ️ You already have access. No changes needed!"
-                                else:
-                                    result_msg = f"✅ Access granted successfully!"
-                                
-                                send_slack_message(channel, result_msg)
-                                update_conversation(conv['interaction_id'], conv['timestamp'], result_msg, from_bot=True)
-                                print(f"📤 Sent result notification to Slack")
-                    except Exception as e:
-                        print(f"⚠️ Error sending Slack notifications: {e}")
-                        # Don't fail the whole handler if Slack fails
+                    # Add approval and result messages to conversation history
+                    channel = slack_context.get('channel')
+                    resource_name = event.get('resource_name', event.get('group_name', ''))
+                    
+                    # Add approval message
+                    approval_msg = f"✅ Approved by {approver}" + (f" for {resource_name}" if resource_name else "")
+                    update_conversation(conv['interaction_id'], conv['timestamp'], approval_msg, from_bot=True)
+                    
+                    # Add result message
+                    if 'already' in result_message.lower() or 'Already a member' in event.get('action_taken', ''):
+                        result_msg = f"ℹ️ You already have access. No changes needed!"
+                    elif 'Failed' in result_message or 'failed' in result_message.lower():
+                        result_msg = f"❌ {result_message}"
+                    else:
+                        result_msg = f"✅ Access granted successfully!"
+                    
+                    update_conversation(conv['interaction_id'], conv['timestamp'], result_msg, from_bot=True)
+                    print(f"📝 Added approval and result messages to conversation history")
                 else:
                     print(f"⚠️ No active conversation found for interaction_id: {interaction_id}")
             else:
@@ -2696,7 +2690,7 @@ def lambda_handler(event, context):
                             lambda_client = boto3.client('lambda')
                             
                             request_details = {
-                                'user_email': user_email,
+                                'user_email': user_email,  # Use actual user email, not "me"
                                 'group_name': matched_group,
                                 'action': 'add',
                                 'requester': user_email
