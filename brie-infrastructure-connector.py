@@ -1041,7 +1041,7 @@ Disconnect-ExchangeOnline -Confirm:$false
                     it_msg = f"❌ **Request Failed**\n\nUser: {user_email}\nDistribution List: {group_name}\nError: {message}"
                 
                 send_slack_message(IT_APPROVAL_CHANNEL, it_msg)
-                        if slack_context.get('user_id'):
+                if slack_context.get('user_id'):
                             lambda_client.invoke(
                                 FunctionName='it-helpdesk-bot',
                                 InvocationType='Event',
