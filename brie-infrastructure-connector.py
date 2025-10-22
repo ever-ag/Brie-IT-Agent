@@ -936,7 +936,8 @@ Disconnect-ExchangeOnline -Confirm:$false
         # Check if this is a shared mailbox request
         if 'action' in params and params['action'] == 'add_user_to_shared_mailbox':
             print(f"🔍 DEBUG: Detected shared mailbox request")
-            user_email = params.get('user_email')
+            # Support both user_emails (array) and user_email (string)
+            user_email = params.get('user_emails', [None])[0] if params.get('user_emails') else params.get('user_email')
             mailbox_email = params.get('mailbox_email')
             print(f"🔍 DEBUG: user_email={user_email}, mailbox_email={mailbox_email}")
             
