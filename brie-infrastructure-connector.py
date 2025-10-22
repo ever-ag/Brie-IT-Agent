@@ -986,7 +986,6 @@ Disconnect-ExchangeOnline -Confirm:$false
             if is_slack_request:
                 # Slack request - send IT channel notification
                 slack_context = email_data.get('slackContext', {})
-                channel = slack_context.get('channel')
                 
                 if success:
                     # Check if user already had access
@@ -998,12 +997,6 @@ Disconnect-ExchangeOnline -Confirm:$false
                     it_msg = f"❌ **Request Failed**\n\nUser: {user_email}\nDistribution List: {group_name}\nError: {message}"
                 
                 send_slack_message(IT_APPROVAL_CHANNEL, it_msg)
-                    
-                    # Send callback to it-helpdesk-bot to update conversation
-                    try:
-                        import boto3
-                        lambda_client = boto3.client('lambda')
-                        slack_context = email_details.get('slackContext', {})
                         if slack_context.get('user_id'):
                             lambda_client.invoke(
                                 FunctionName='it-helpdesk-bot',
