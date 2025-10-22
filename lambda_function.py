@@ -700,6 +700,22 @@ def query_group_type(group_name):
         print(f"Error querying group type: {e}")
         return None
 
+def parse_multiple_users(user_string, requester_email):
+    """Parse comma/and separated users into list of emails"""
+    import re
+    # Split on 'and' or ','
+    users = re.split(r'\s+and\s+|,\s*', user_string, flags=re.IGNORECASE)
+    emails = []
+    for user in users:
+        user = user.strip()
+        if not user:
+            continue
+        if user.lower() == 'me':
+            emails.append(requester_email)
+        else:
+            emails.append(f"{user.lower().replace(' ', '.')}@ever.ag")
+    return emails
+
 def detect_automation_request(message):
     """Detect if message is a DL, Shared Mailbox, or SSO request"""
     message_lower = message.lower()
@@ -1439,11 +1455,21 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             # BYPASS: Skip broken it-action-processor for shared mailbox, extract directly
             import re
             
-            # Extract mailbox email from message (pattern: email@domain.com)
+            # Extract user and mailbox from message
+            user_match = re.search(r'add\s+([^to]+?)\s+to', clean_message, re.IGNORECASE)
             mailbox_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', clean_message)
             
             if mailbox_match:
                 mailbox_email = mailbox_match.group(1).strip()
+                
+                # Parse multiple users if user_match exists, otherwise use requester
+                if user_match:
+                    target_user_string = user_match.group(1).strip()
+                    target_emails = parse_multiple_users(target_user_string, user_email)
+                else:
+                    target_emails = [user_email]
+                
+                print(f"✅ Parsed {len(target_emails)} user(s) for shared mailbox: {target_emails}")
                 
                 # Send approval request
                 msg = "✅ Your shared mailbox request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
@@ -1453,6 +1479,7 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                 if interaction_id and timestamp:
                     update_conversation(interaction_id, timestamp, msg, from_bot=True)
                 
+                user_list = ", ".join(target_emails)
                 approval_response = lambda_client.invoke(
                     FunctionName='it-approval-system',
                     InvocationType='Event',
@@ -1461,11 +1488,11 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                         "approvalType": "SHARED_MAILBOX",
                         "requester": user_email,
                         "request_type": "Shared Mailbox Access",
-                        "details": f"User: {user_email}\nShared Mailbox: {mailbox_email}\nAction: Add access",
+                        "details": f"Users: {user_list}\nShared Mailbox: {mailbox_email}\nAction: Add access",
                         "callback_function": "brie-infrastructure-connector",
                         "callback_params": {
                             "action": "add_user_to_shared_mailbox",
-                            "user_email": user_email,
+                            "user_emails": target_emails,  # Changed to array
                             "mailbox_email": mailbox_email,
                             "channel": channel,
                             "thread_ts": thread_ts,
@@ -1474,7 +1501,7 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                         }
                     })
                 )
-                print(f"✅ Shared mailbox approval created for {mailbox_email}")
+                print(f"✅ Batch shared mailbox approval created for {len(target_emails)} user(s)")
                 return True
             else:
                 print("❌ Could not extract mailbox email from message")
@@ -1489,17 +1516,15 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             group_match = re.search(r'to\s+(?:the\s+)?(.+?)(?:\s+group)?$', clean_message, re.IGNORECASE)
             
             if user_match and group_match:
-                target_user = user_match.group(1).strip()
+                target_user_string = user_match.group(1).strip()
                 target_group = group_match.group(1).strip()
                 
-                # If user says "me", use their actual email
-                if target_user.lower() == 'me':
-                    target_email = user_email
-                else:
-                    target_email = f"{target_user.lower().replace(' ', '.')}@ever.ag"
+                # Parse multiple users
+                target_emails = parse_multiple_users(target_user_string, user_email)
+                print(f"✅ Parsed {len(target_emails)} user(s): {target_emails}")
                 
                 request_details = {
-                    'user_email': target_email,
+                    'user_emails': target_emails,  # Changed to array
                     'group_name': target_group,
                     'action': 'add',
                     'requester': user_email
@@ -1601,6 +1626,8 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             # Update request with exact group name
             request_details['group_name'] = exact_group
             
+            # Create batch approval with user array
+            user_list = ", ".join(target_emails)
             approval_response = lambda_client.invoke(
                 FunctionName='it-approval-system',
                 InvocationType='Event',
@@ -1610,7 +1637,7 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     "requester": user_email,
                     "ssoGroupRequest": request_details,
                     "emailData": email_data,
-                    "details": f"User: {user_email}\nGroup: {exact_group}\nAction: {action}",
+                    "details": f"Users: {user_list}\nGroup: {exact_group}\nAction: {action}",
                     "callback_function": "brie-ad-group-manager",
                     "callback_params": {
                         "ssoGroupRequest": request_details,
@@ -1620,17 +1647,25 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     }
                 })
             )
+            print(f"✅ Batch SSO approval created for {len(target_emails)} user(s)")
             return True
         
         elif automation_type == 'DISTRIBUTION_LIST':
             import re
             
-            # Extract group name from message
+            # Extract user and group from message
+            user_match = re.search(r'add\s+([^to]+?)\s+to', clean_message, re.IGNORECASE)
             group_match = re.search(r'to\s+(?:the\s+)?(.+?)(?:\s+dl)?$', clean_message, re.IGNORECASE)
-            if not group_match:
+            
+            if not user_match or not group_match:
                 return False
             
+            target_user_string = user_match.group(1).strip()
             group_search = group_match.group(1).strip()
+            
+            # Parse multiple users
+            target_emails = parse_multiple_users(target_user_string, user_email)
+            print(f"✅ Parsed {len(target_emails)} user(s) for DL: {target_emails}")
             print(f"Searching for distribution list: {group_search}")
             
             # Search AD/O365 for matching distribution lists
@@ -1705,7 +1740,8 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     update_conversation(interaction_id, timestamp, msg, from_bot=True)
                 return True
             
-            # Create approval
+            # Create batch approval
+            user_list = ", ".join(target_emails)
             msg = "✅ Your distribution list request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
             send_slack_message(channel, msg)
             if interaction_id and timestamp:
@@ -1719,11 +1755,11 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     "approvalType": "DISTRIBUTION_LIST",
                     "requester": user_email,
                     "request_type": "Distribution List Access",
-                    "details": f"User: {user_email}\nDistribution List: {exact_dl}\nAction: Add",
+                    "details": f"Users: {user_list}\nDistribution List: {exact_dl}\nAction: Add",
                     "callback_function": "brie-infrastructure-connector",
                     "callback_params": {
                         "action": "add_user_to_group",
-                        "user_email": user_email,
+                        "user_emails": target_emails,  # Changed to array
                         "group_name": exact_dl,
                         "emailData": email_data,
                         "interaction_id": str(interaction_id) if interaction_id else None,
@@ -1731,6 +1767,8 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                     }
                 })
             )
+            print(f"✅ Batch DL approval created for {len(target_emails)} user(s)")
+            return True
             print(f"✅ DL approval created for {exact_dl}")
             return True
         
