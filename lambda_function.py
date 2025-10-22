@@ -738,6 +738,7 @@ def detect_automation_request(message):
                 r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?([a-z0-9\s-]+?)\s+(?:group|sso|dl)',
                 r'(?:add|remove|grant|revoke).*?(?:to|from)\s+(?:the\s+)?([a-z0-9\s-]+?)$',
                 r'(?:access|permission).*?(?:to|for)\s+(?:the\s+)?([a-z0-9\s-]+?)\s+(?:group|sso|dl)',
+                r'(?:add|remove).*?(?:to|from)\s+([a-z0-9-]+(?:dl|test|group))',  # Matches names ending in dl/test/group
             ]
             
             for pattern in patterns:
