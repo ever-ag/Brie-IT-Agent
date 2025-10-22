@@ -659,8 +659,10 @@ def add_user_to_shared_mailbox(user_email, mailbox_email):
 
 def lambda_handler(event, context):
     """Lambda handler for group management operations"""
+    print(f"🔍 DEBUG: Received event: {json.dumps(event)}")
     
     action = event.get('action')
+    print(f"🔍 DEBUG: Action = {action}")
     
     if action == 'add_user_to_group':
         user_email = event.get('user_email')
@@ -668,7 +670,31 @@ def lambda_handler(event, context):
         
         success, message = add_user_to_distribution_group(user_email, group_name)
         
-        # NO EMAIL NOTIFICATION - Let approval system handle it
+        # Send IT channel notification
+        try:
+            it_message = f"{'✅' if success else '❌'} **Distribution List Request Completed**\n\nUser: {user_email}\nDistribution List: {group_name}\nResult: {message}"
+            
+            slack_data = {
+                'channel': IT_APPROVAL_CHANNEL,
+                'text': it_message,
+                'as_user': True
+            }
+            req = urllib.request.Request(
+                'https://slack.com/api/chat.postMessage',
+                data=json.dumps(slack_data).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {SLACK_BOT_TOKEN}'
+                }
+            )
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode())
+                if result.get('ok'):
+                    print(f"✅ IT channel notification sent")
+                else:
+                    print(f"❌ Failed to send IT notification: {result.get('error')}")
+        except Exception as e:
+            print(f"❌ Error sending IT notification: {e}")
         
         return {
             'statusCode': 200,  # Always return 200 for proper response parsing
@@ -702,9 +728,10 @@ def lambda_handler(event, context):
         BESPIN_INSTANCE_ID = "i-0dca7766c8de43f08"
         
         search_script = f"""
-$SecurePassword = ConvertTo-SecureString 'Zasa345270Zasa345270' -AsPlainText -Force
-$Credential = New-Object System.Management.Automation.PSCredential ('svc-exchange-automation@ever.ag', $SecurePassword)
-Connect-ExchangeOnline -Credential $Credential -ShowBanner:$false
+$AppId = 'c33fc45c-9313-4f45-ac31-baf568616137'
+$Organization = 'ever.ag'
+$CertificateThumbprint = '5A9D9A9076B309B70828EBB3C9AE57496DB68421'
+Connect-ExchangeOnline -AppId $AppId -CertificateThumbprint $CertificateThumbprint -Organization $Organization -ShowBanner:$false
 $mailbox = Get-Mailbox -Identity '{mailbox_name}' -ErrorAction SilentlyContinue
 if ($mailbox) {{
     Write-Host "FOUND:$($mailbox.PrimarySmtpAddress)"
@@ -768,12 +795,11 @@ Disconnect-ExchangeOnline -Confirm:$false
         ssm = boto3.client('ssm')
         BESPIN_INSTANCE_ID = "i-0dca7766c8de43f08"
         
-        # First check if user already has access - using certificate auth
+        # First check if user already has access
         check_script = f"""
 $AppId = 'c33fc45c-9313-4f45-ac31-baf568616137'
 $Organization = 'ever.ag'
 $CertificateThumbprint = '5A9D9A9076B309B70828EBB3C9AE57496DB68421'
-
 Connect-ExchangeOnline -AppId $AppId -CertificateThumbprint $CertificateThumbprint -Organization $Organization -ShowBanner:$false
 $perms = Get-MailboxPermission -Identity '{mailbox_email}' | Where-Object {{$_.User -like '*{user_email}*' -and $_.AccessRights -contains 'FullAccess'}}
 if ($perms) {{
@@ -818,6 +844,28 @@ Disconnect-ExchangeOnline -Confirm:$false
             
             if 'ALREADY_HAS_ACCESS' in output:
                 print(f"✅ User already has access")
+                
+                # Send IT channel notification
+                try:
+                    IT_CHANNEL = "C09KB40PL9J"
+                    SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
+                    it_message = f"ℹ️ **Request Completed**\n\nUser: {user_email}\nShared Mailbox: {mailbox_email}\nAction: Already has access"
+                    
+                    slack_data = {
+                        'channel': IT_CHANNEL,
+                        'text': it_message,
+                        'as_user': True
+                    }
+                    req = urllib.request.Request(
+                        'https://slack.com/api/chat.postMessage',
+                        data=json.dumps(slack_data).encode('utf-8'),
+                        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                    )
+                    with urllib.request.urlopen(req) as response:
+                        print(f"📤 IT channel notification sent")
+                except Exception as e:
+                    print(f"⚠️ Failed to send IT channel notification: {e}")
+                
                 return {
                     'statusCode': 200,
                     'body': json.dumps({
@@ -826,13 +874,12 @@ Disconnect-ExchangeOnline -Confirm:$false
                     })
                 }
             
-            # User doesn't have access, add them - using certificate auth
+            # User doesn't have access, add them
             print(f"➕ Adding {user_email} to {mailbox_email}")
             add_script = f"""
 $AppId = 'c33fc45c-9313-4f45-ac31-baf568616137'
 $Organization = 'ever.ag'
 $CertificateThumbprint = '5A9D9A9076B309B70828EBB3C9AE57496DB68421'
-
 Connect-ExchangeOnline -AppId $AppId -CertificateThumbprint $CertificateThumbprint -Organization $Organization -ShowBanner:$false
 Add-MailboxPermission -Identity '{mailbox_email}' -User '{user_email}' -AccessRights FullAccess -InheritanceType All -AutoMapping $true
 Disconnect-ExchangeOnline -Confirm:$false
@@ -855,6 +902,27 @@ Disconnect-ExchangeOnline -Confirm:$false
                 )
                 
                 if result['Status'] in ['Success', 'InProgress']:
+                    # Send IT channel notification
+                    try:
+                        IT_CHANNEL = "C09KB40PL9J"
+                        SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
+                        it_message = f"✅ **Request Completed**\n\nUser: {user_email}\nShared Mailbox: {mailbox_email}\nAction: Access granted"
+                        
+                        slack_data = {
+                            'channel': IT_CHANNEL,
+                            'text': it_message,
+                            'as_user': True
+                        }
+                        req = urllib.request.Request(
+                            'https://slack.com/api/chat.postMessage',
+                            data=json.dumps(slack_data).encode('utf-8'),
+                            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                        )
+                        with urllib.request.urlopen(req) as response:
+                            print(f"📤 IT channel notification sent")
+                    except Exception as e:
+                        print(f"⚠️ Failed to send IT channel notification: {e}")
+                    
                     return {
                         'statusCode': 200,
                         'body': json.dumps({
@@ -866,28 +934,6 @@ Disconnect-ExchangeOnline -Confirm:$false
                 if attempt < 5:
                     time.sleep(5)
             
-            # Send callback for failure
-            if 'email_details' in event:
-                try:
-                    lambda_client = boto3.client('lambda')
-                    slack_context = event.get('email_details', {}).get('slackContext', {})
-                    if slack_context.get('user_id'):
-                        lambda_client.invoke(
-                            FunctionName='it-helpdesk-bot',
-                            InvocationType='Event',
-                            Payload=json.dumps({
-                                'callback_result': False,
-                                'result_data': {
-                                    'slackContext': slack_context,
-                                    'message': f"❌ **Request Failed**\n\nFailed to add you to {mailbox_email}. Please contact IT.",
-                                    'status': 'failed',
-                                    'mailbox_email': mailbox_email,
-                                    'user_email': user_email
-                                }
-                            })
-                        )
-                except: pass
-            
             return {
                 'statusCode': 200,
                 'body': json.dumps({
@@ -897,28 +943,6 @@ Disconnect-ExchangeOnline -Confirm:$false
             }
             
         except Exception as e:
-            # Send callback for exception
-            if 'email_details' in event:
-                try:
-                    lambda_client = boto3.client('lambda')
-                    slack_context = event.get('email_details', {}).get('slackContext', {})
-                    if slack_context.get('user_id'):
-                        lambda_client.invoke(
-                            FunctionName='it-helpdesk-bot',
-                            InvocationType='Event',
-                            Payload=json.dumps({
-                                'callback_result': False,
-                                'result_data': {
-                                    'slackContext': slack_context,
-                                    'message': f"❌ **Request Failed**\n\nError: {str(e)}",
-                                    'status': 'failed',
-                                    'mailbox_email': mailbox_email,
-                                    'user_email': user_email
-                                }
-                            })
-                        )
-                except: pass
-            
             return {
                 'statusCode': 200,
                 'body': json.dumps({
@@ -930,58 +954,21 @@ Disconnect-ExchangeOnline -Confirm:$false
     elif action == 'execute':
         # Handle approval callback execution
         params = event.get('params', {})
+        print(f"🔍 DEBUG: Execute action - params = {json.dumps(params)}")
         
         # Check if this is a shared mailbox request
         if 'action' in params and params['action'] == 'add_user_to_shared_mailbox':
+            print(f"🔍 DEBUG: Detected shared mailbox request")
             user_email = params.get('user_email')
             mailbox_email = params.get('mailbox_email')
-            email_details = params.get('email_details', {})
+            print(f"🔍 DEBUG: user_email={user_email}, mailbox_email={mailbox_email}")
             
-            # Call the existing shared mailbox handler with email_details
-            result = lambda_handler({
+            # Call the existing shared mailbox handler
+            return lambda_handler({
                 'action': 'add_user_to_shared_mailbox',
                 'user_email': user_email,
-                'mailbox_email': mailbox_email,
-                'email_details': email_details
+                'mailbox_email': mailbox_email
             }, None)
-            
-            # Parse result and send callback to it-helpdesk-bot
-            result_body = json.loads(result.get('body', '{}'))
-            success = result_body.get('success', False)
-            message = result_body.get('message', '')
-            
-            # Send callback to it-helpdesk-bot
-            try:
-                import boto3
-                lambda_client = boto3.client('lambda')
-                slack_context = email_details.get('slackContext', {})
-                
-                if slack_context.get('user_id'):
-                    # Check if user already had access
-                    if 'already has access' in message.lower():
-                        user_msg = f"ℹ️ **Already Has Access**\n\nYou already have access to the {mailbox_email} shared mailbox."
-                    else:
-                        user_msg = f"✅ **Request Completed!**\n\nYou now have access to the {mailbox_email} shared mailbox."
-                    
-                    print(f"✅ Sent callback to it-helpdesk-bot for shared mailbox with status: {'completed' if success else 'failed'}")
-                    lambda_client.invoke(
-                        FunctionName='it-helpdesk-bot',
-                        InvocationType='Event',
-                        Payload=json.dumps({
-                            'callback_result': success,
-                            'result_data': {
-                                'slackContext': slack_context,
-                                'message': user_msg,
-                                'status': 'completed' if success else 'failed',
-                                'mailbox_email': mailbox_email,
-                                'user_email': user_email
-                            }
-                        })
-                    )
-            except Exception as e:
-                print(f"❌ Error sending callback: {e}")
-            
-            return result
         
         # Check if this is a direct action (DL format) or plan-based (shared mailbox format)
         elif 'action' in params and params['action'] == 'add_user_to_group':
