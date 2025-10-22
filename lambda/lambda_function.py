@@ -1621,6 +1621,66 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                 })
             )
             return True
+        
+        elif automation_type == 'DISTRIBUTION_LIST':
+            # BYPASS: Skip it-action-processor for DL, handle directly like SSO
+            import re
+            
+            # Extract user and group from message
+            user_match = re.search(r'add\s+([^to]+?)\s+to', clean_message, re.IGNORECASE)
+            group_match = re.search(r'to\s+(?:the\s+)?(.+?)(?:\s+dl)?$', clean_message, re.IGNORECASE)
+            
+            if user_match and group_match:
+                target_user = user_match.group(1).strip()
+                target_group = group_match.group(1).strip()
+                
+                # If user says "me", use their actual email
+                if target_user.lower() == 'me':
+                    target_email = user_email
+                else:
+                    target_email = f"{target_user.lower().replace(' ', '.')}@ever.ag"
+                
+                request_details = {
+                    'user_email': target_email,
+                    'group_name': target_group,
+                    'action': 'add',
+                    'requester': user_email
+                }
+                print(f"✅ Direct DL extraction: {request_details}")
+                
+                # Send approval request directly
+                msg = "✅ Your distribution list request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                send_slack_message(channel, msg)
+                
+                if interaction_id and timestamp:
+                    update_conversation(interaction_id, timestamp, msg, from_bot=True)
+                
+                approval_response = lambda_client.invoke(
+                    FunctionName='it-approval-system',
+                    InvocationType='Event',
+                    Payload=json.dumps({
+                        "action": "create_approval",
+                        "approvalType": "DISTRIBUTION_LIST",
+                        "requester": user_email,
+                        "request_type": "Distribution List Access",
+                        "details": f"User: {target_email}\nDistribution List: {target_group}\nAction: Add",
+                        "callback_function": "brie-infrastructure-connector",
+                        "callback_params": {
+                            "action": "add_user_to_group",
+                            "user_email": target_email,
+                            "group_name": target_group,
+                            "emailData": email_data,
+                            "interaction_id": str(interaction_id) if interaction_id else None,
+                            "timestamp": int(timestamp) if timestamp else None
+                        }
+                    })
+                )
+                print(f"✅ DL approval created for {target_group}")
+                return True
+            else:
+                print("❌ Could not extract DL request details")
+                return False
+        
         else:
             # DL and Mailbox requests - check if approval was already sent
             body_str = extract_result.get('body', '{}')
