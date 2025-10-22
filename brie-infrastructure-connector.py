@@ -949,8 +949,8 @@ Disconnect-ExchangeOnline -Confirm:$false
         
         # Check if this is a direct action (DL format) or plan-based (shared mailbox format)
         elif 'action' in params and params['action'] == 'add_user_to_group':
-            # Direct DL action format
-            user_email = params.get('user_email')
+            # Direct DL action format - support both user_emails (array) and user_email (string)
+            user_email = params.get('user_emails', [None])[0] if params.get('user_emails') else params.get('user_email')
             group_name = params.get('group_name')
             email_details = params.get('email_details', {})
             
