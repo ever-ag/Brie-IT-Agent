@@ -665,78 +665,18 @@ def lambda_handler(event, context):
     print(f"🔍 DEBUG: Action = {action}")
     
     if action == 'add_user_to_group':
-        # Support both single user (string) and multiple users (array)
-        user_emails_raw = event.get('user_emails') or event.get('user_email')
-        if isinstance(user_emails_raw, str):
-            user_emails = [user_emails_raw]
-        elif isinstance(user_emails_raw, list):
-            user_emails = user_emails_raw
-        else:
-            user_emails = []
-        
+        user_email = event.get('user_email')
         group_name = event.get('group_name')
         
-        if not user_emails:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'success': False,
-                    'message': 'user_email or user_emails required'
-                })
-            }
+        success, message = add_user_to_distribution_group(user_email, group_name)
         
-        # Process each user
-        results = []
-        for user_email in user_emails:
-            print(f"Processing user: {user_email}")
-            success, message = add_user_to_distribution_group(user_email, group_name)
-            results.append({
-                'user_email': user_email,
-                'success': success,
-                'message': message
-            })
-        
-        # Determine overall success
-        all_success = all(r['success'] for r in results)
-        failed_users = [r['user_email'] for r in results if not r['success']]
-        
-        # Send IT channel notification
-        try:
-            user_list = ", ".join(user_emails)
-            it_message = f"{'✅' if all_success else '❌'} **Distribution List Request Completed**\n\nUsers: {user_list}\nDistribution List: {group_name}\n"
-            if all_success:
-                it_message += f"Result: All {len(user_emails)} users processed successfully"
-            else:
-                it_message += f"Result: {len(user_emails) - len(failed_users)} succeeded, {len(failed_users)} failed\nFailed: {', '.join(failed_users)}"
-            
-            slack_data = {
-                'channel': IT_APPROVAL_CHANNEL,
-                'text': it_message,
-                'as_user': True
-            }
-            req = urllib.request.Request(
-                'https://slack.com/api/chat.postMessage',
-                data=json.dumps(slack_data).encode('utf-8'),
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {SLACK_BOT_TOKEN}'
-                }
-            )
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read().decode())
-                if result.get('ok'):
-                    print(f"✅ IT channel notification sent")
-                else:
-                    print(f"❌ Failed to send IT notification: {result.get('error')}")
-        except Exception as e:
-            print(f"❌ Error sending IT notification: {e}")
+        # NO EMAIL NOTIFICATION - Let approval system handle it
         
         return {
-            'statusCode': 200 if all_success else 400,
+            'statusCode': 200,  # Always return 200 for proper response parsing
             'body': json.dumps({
-                'success': all_success,
-                'message': f"Processed {len(user_emails)} users: {len(user_emails) - len(failed_users)} succeeded, {len(failed_users)} failed",
-                'results': results
+                'success': success,
+                'message': message
             })
         }
     
@@ -821,25 +761,8 @@ Disconnect-ExchangeOnline -Confirm:$false
         }
     
     elif action == 'add_user_to_shared_mailbox':
-        # Support both single user (string) and multiple users (array)
-        user_emails_raw = event.get('user_emails') or event.get('user_email')
-        if isinstance(user_emails_raw, str):
-            user_emails = [user_emails_raw]
-        elif isinstance(user_emails_raw, list):
-            user_emails = user_emails_raw
-        else:
-            user_emails = []
-        
+        user_email = event.get('user_email')
         mailbox_email = event.get('mailbox_email')
-        
-        if not user_emails:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'success': False,
-                    'message': 'user_email or user_emails required'
-                })
-            }
         
         # Execute PowerShell via SSM on Bespin instance
         import boto3
@@ -848,13 +771,8 @@ Disconnect-ExchangeOnline -Confirm:$false
         ssm = boto3.client('ssm')
         BESPIN_INSTANCE_ID = "i-0dca7766c8de43f08"
         
-        # Process each user
-        results = []
-        for user_email in user_emails:
-            print(f"Processing user: {user_email}")
-            
-            # First check if user already has access
-            check_script = f"""
+        # First check if user already has access
+        check_script = f"""
 $AppId = 'c33fc45c-9313-4f45-ac31-baf568616137'
 $Organization = 'ever.ag'
 $CertificateThumbprint = '5A9D9A9076B309B70828EBB3C9AE57496DB68421'
@@ -867,47 +785,74 @@ if ($perms) {{
 }}
 Disconnect-ExchangeOnline -Confirm:$false
 """
+        
+        try:
+            # Check existing permissions
+            print(f"🔍 Checking if {user_email} already has access to {mailbox_email}")
+            response = ssm.send_command(
+                InstanceIds=[BESPIN_INSTANCE_ID],
+                DocumentName='AWS-RunPowerShellScript',
+                Parameters={'commands': [check_script]}
+            )
             
-            try:
-                # Check existing permissions
-                print(f"🔍 Checking if {user_email} already has access to {mailbox_email}")
-                response = ssm.send_command(
-                    InstanceIds=[BESPIN_INSTANCE_ID],
-                    DocumentName='AWS-RunPowerShellScript',
-                    Parameters={'commands': [check_script]}
+            command_id = response['Command']['CommandId']
+            time.sleep(8)
+            
+            # Wait for command to complete
+            for i in range(10):
+                result = ssm.get_command_invocation(
+                    CommandId=command_id,
+                    InstanceId=BESPIN_INSTANCE_ID
                 )
                 
-                command_id = response['Command']['CommandId']
-                time.sleep(8)
+                status = result.get('Status')
+                print(f"📊 Check command status: {status}")
                 
-                # Wait for command to complete
-                for i in range(10):
-                    result = ssm.get_command_invocation(
-                        CommandId=command_id,
-                        InstanceId=BESPIN_INSTANCE_ID
+                if status in ['Success', 'Failed']:
+                    break
+                    
+                time.sleep(2)
+            
+            output = result.get('StandardOutputContent', '')
+            error = result.get('StandardErrorContent', '')
+            print(f"📋 Permission check output: {output}")
+            print(f"📋 Permission check error: {error}")
+            
+            if 'ALREADY_HAS_ACCESS' in output:
+                print(f"✅ User already has access")
+                
+                # Send IT channel notification
+                try:
+                    IT_CHANNEL = "C09KB40PL9J"
+                    SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
+                    it_message = f"ℹ️ **Request Completed**\n\nUser: {user_email}\nShared Mailbox: {mailbox_email}\nAction: Already has access"
+                    
+                    slack_data = {
+                        'channel': IT_CHANNEL,
+                        'text': it_message,
+                        'as_user': True
+                    }
+                    req = urllib.request.Request(
+                        'https://slack.com/api/chat.postMessage',
+                        data=json.dumps(slack_data).encode('utf-8'),
+                        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
                     )
-                    
-                    status = result.get('Status')
-                    
-                    if status in ['Success', 'Failed']:
-                        break
-                        
-                    time.sleep(2)
+                    with urllib.request.urlopen(req) as response:
+                        print(f"📤 IT channel notification sent")
+                except Exception as e:
+                    print(f"⚠️ Failed to send IT channel notification: {e}")
                 
-                output = result.get('StandardOutputContent', '')
-                
-                if 'ALREADY_HAS_ACCESS' in output:
-                    print(f"✅ User {user_email} already has access")
-                    results.append({
-                        'user_email': user_email,
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({
                         'success': True,
                         'message': f'{user_email} already has access to {mailbox_email}'
                     })
-                    continue
-                
-                # User doesn't have access, add them
-                print(f"➕ Adding {user_email} to {mailbox_email}")
-                add_script = f"""
+                }
+            
+            # User doesn't have access, add them
+            print(f"➕ Adding {user_email} to {mailbox_email}")
+            add_script = f"""
 $AppId = 'c33fc45c-9313-4f45-ac31-baf568616137'
 $Organization = 'ever.ag'
 $CertificateThumbprint = '5A9D9A9076B309B70828EBB3C9AE57496DB68421'
@@ -915,85 +860,72 @@ Connect-ExchangeOnline -AppId $AppId -CertificateThumbprint $CertificateThumbpri
 Add-MailboxPermission -Identity '{mailbox_email}' -User '{user_email}' -AccessRights FullAccess -InheritanceType All -AutoMapping $true
 Disconnect-ExchangeOnline -Confirm:$false
 """
-                
-                response = ssm.send_command(
-                    InstanceIds=[BESPIN_INSTANCE_ID],
-                    DocumentName='AWS-RunPowerShellScript',
-                    Parameters={'commands': [add_script]}
+            
+            response = ssm.send_command(
+                InstanceIds=[BESPIN_INSTANCE_ID],
+                DocumentName='AWS-RunPowerShellScript',
+                Parameters={'commands': [add_script]}
+            )
+            
+            command_id = response['Command']['CommandId']
+            time.sleep(8)
+            
+            # Check result
+            for attempt in range(6):
+                result = ssm.get_command_invocation(
+                    CommandId=command_id,
+                    InstanceId=BESPIN_INSTANCE_ID
                 )
                 
-                command_id = response['Command']['CommandId']
-                time.sleep(8)
-                
-                # Check result
-                for attempt in range(6):
-                    result = ssm.get_command_invocation(
-                        CommandId=command_id,
-                        InstanceId=BESPIN_INSTANCE_ID
-                    )
+                if result['Status'] in ['Success', 'InProgress']:
+                    # Send IT channel notification
+                    try:
+                        IT_CHANNEL = "C09KB40PL9J"
+                        SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
+                        it_message = f"✅ **Request Completed**\n\nUser: {user_email}\nShared Mailbox: {mailbox_email}\nAction: Access granted"
+                        
+                        slack_data = {
+                            'channel': IT_CHANNEL,
+                            'text': it_message,
+                            'as_user': True
+                        }
+                        req = urllib.request.Request(
+                            'https://slack.com/api/chat.postMessage',
+                            data=json.dumps(slack_data).encode('utf-8'),
+                            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                        )
+                        with urllib.request.urlopen(req) as response:
+                            print(f"📤 IT channel notification sent")
+                    except Exception as e:
+                        print(f"⚠️ Failed to send IT channel notification: {e}")
                     
-                    if result['Status'] in ['Success', 'InProgress']:
-                        results.append({
-                            'user_email': user_email,
+                    return {
+                        'statusCode': 200,
+                        'body': json.dumps({
                             'success': True,
                             'message': f'Successfully added {user_email} to {mailbox_email} shared mailbox'
                         })
-                        break
-                    
-                    if attempt < 5:
-                        time.sleep(5)
-                else:
-                    results.append({
-                        'user_email': user_email,
-                        'success': False,
-                        'message': f'Failed to add {user_email} to {mailbox_email}'
-                    })
+                    }
                 
-            except Exception as e:
-                results.append({
-                    'user_email': user_email,
+                if attempt < 5:
+                    time.sleep(5)
+            
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'success': False,
+                    'message': f'Failed to add {user_email} to {mailbox_email}'
+                })
+            }
+            
+        except Exception as e:
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
                     'success': False,
                     'message': f'Error: {str(e)}'
                 })
-        
-        # Determine overall success
-        all_success = all(r['success'] for r in results)
-        failed_users = [r['user_email'] for r in results if not r['success']]
-        
-        # Send IT channel notification
-        try:
-            IT_CHANNEL = "C09KB40PL9J"
-            SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
-            user_list = ", ".join(user_emails)
-            it_message = f"{'✅' if all_success else '❌'} **Shared Mailbox Request Completed**\n\nUsers: {user_list}\nShared Mailbox: {mailbox_email}\n"
-            if all_success:
-                it_message += f"Result: All {len(user_emails)} users processed successfully"
-            else:
-                it_message += f"Result: {len(user_emails) - len(failed_users)} succeeded, {len(failed_users)} failed\nFailed: {', '.join(failed_users)}"
-            
-            slack_data = {
-                'channel': IT_CHANNEL,
-                'text': it_message,
-                'as_user': True
             }
-            req = urllib.request.Request(
-                'https://slack.com/api/chat.postMessage',
-                data=json.dumps(slack_data).encode('utf-8'),
-                headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
-            )
-            with urllib.request.urlopen(req) as response:
-                print(f"📤 IT channel notification sent")
-        except Exception as e:
-            print(f"⚠️ Failed to send IT channel notification: {e}")
-        
-        return {
-            'statusCode': 200 if all_success else 400,
-            'body': json.dumps({
-                'success': all_success,
-                'message': f"Processed {len(user_emails)} users: {len(user_emails) - len(failed_users)} succeeded, {len(failed_users)} failed",
-                'results': results
-            })
-        }
     
     elif action == 'execute':
         # Handle approval callback execution
@@ -1019,29 +951,39 @@ Disconnect-ExchangeOnline -Confirm:$false
             # Direct DL action format
             user_email = params.get('user_email')
             group_name = params.get('group_name')
-            email_data = params.get('emailData', {})
+            email_details = params.get('email_details', {})
             
             success, message = add_user_to_distribution_group(user_email, group_name)
             
-            # Check if this came from Slack
-            message_id = email_data.get('messageId', '')
-            is_slack_request = message_id.startswith('slack_')
+            # Check if this came from Slack by looking at message_id
+            original_message_id = email_details.get('original_message_id', '')
+            is_slack_request = original_message_id.startswith('slack_')
             
             if is_slack_request:
-                # Slack request - send IT channel notification
-                slack_context = email_data.get('slackContext', {})
+                # Slack request - send Slack messages instead of email
+                # Get channel from message_id: slack_CHANNEL_TIMESTAMP
+                parts = original_message_id.split('_')
+                channel = parts[1] if len(parts) > 1 else None
+                user_name = email_details.get('requester', '').split('@')[0]  # Extract name from email
                 
-                if success:
+                if channel and success:
                     # Check if user already had access
                     if 'already has access' in message.lower():
+                        user_msg = f"ℹ️ **Already a Member**\n\n{message}"
                         it_msg = f"ℹ️ **Already a Member**\n\nUser: {user_email}\nDistribution List: {group_name}\n{message}"
                     else:
-                        it_msg = f"✅ **Request Completed**\n\nUser: {user_email}\nDistribution List: {group_name}\nAction: Added"
-                else:
-                    it_msg = f"❌ **Request Failed**\n\nUser: {user_email}\nDistribution List: {group_name}\nError: {message}"
-                
-                send_slack_message(IT_APPROVAL_CHANNEL, it_msg)
-                if slack_context.get('user_id'):
+                        user_msg = f"✅ **Request Completed!**\n\n{message}"
+                        it_msg = f"✅ **Request Completed**\n\nUser: {user_email}\nDistribution List: {group_name}\nAction: Added\nApproved by: {email_details.get('approver', 'Unknown')}"
+                    
+                    send_slack_message(channel, user_msg)
+                    send_slack_message(IT_APPROVAL_CHANNEL, it_msg)
+                    
+                    # Send callback to it-helpdesk-bot to update conversation
+                    try:
+                        import boto3
+                        lambda_client = boto3.client('lambda')
+                        slack_context = email_details.get('slackContext', {})
+                        if slack_context.get('user_id'):
                             lambda_client.invoke(
                                 FunctionName='it-helpdesk-bot',
                                 InvocationType='Event',
