@@ -2723,7 +2723,9 @@ def lambda_handler(event, context):
                                     "callback_function": "brie-ad-group-manager",
                                     "callback_params": {
                                         "ssoGroupRequest": request_details,
-                                        "emailData": email_data
+                                        "emailData": email_data,
+                                        "interaction_id": str(conv_data.get('interaction_id')) if conv_data.get('interaction_id') else None,
+                                        "timestamp": int(conv_data.get('timestamp')) if conv_data.get('timestamp') else None
                                     }
                                 })
                             )
