@@ -51,10 +51,13 @@ def notify_bot_approval_processed(approval_id, status, result_message, slack_con
             
         # Add request details if available
         if request_data:
+            # Handle both SSO groups and shared mailboxes
+            resource = request_data.get('group_name') or request_data.get('mailbox_email')
             callback_payload.update({
                 'user_email': request_data.get('user_email'),
                 'group_name': request_data.get('group_name'),
-                'resource_name': request_data.get('group_name'),
+                'mailbox_email': request_data.get('mailbox_email'),
+                'resource_name': resource,
                 'action_taken': 'Already a member' if 'already a member' in result_message.lower() else 'Added to group'
             })
         
@@ -172,14 +175,27 @@ def process_approval_response(approval_id, action, approver):
                 print(f"📧 Execution result email sent: {success} - {message}")
                 
                 # **NOTIFY BOT OF COMPLETION**
+                # Extract resource data based on request type
+                request_data = {}
+                callback_params = approval.get('callback_params', {})
+                
+                if callback_params.get('ssoGroupRequest'):
+                    request_data = callback_params['ssoGroupRequest']
+                elif callback_params.get('mailbox_email'):
+                    # Shared mailbox request
+                    request_data = {
+                        'mailbox_email': callback_params.get('mailbox_email'),
+                        'user_email': callback_params.get('user_email')
+                    }
+                
                 notify_bot_approval_processed(
                     approval_id=approval_id,
                     status='approved',
                     result_message=result_message,
-                    slack_context=approval.get('callback_params', {}).get('emailData', {}).get('slackContext', {}),
-                    interaction_id=approval.get('callback_params', {}).get('interaction_id'),
+                    slack_context=callback_params.get('emailData', {}).get('slackContext', {}),
+                    interaction_id=callback_params.get('interaction_id'),
                     approver=approver,
-                    request_data=approval.get('callback_params', {}).get('ssoGroupRequest', {})
+                    request_data=request_data
                 )
                 
             except Exception as e:
@@ -196,14 +212,26 @@ def process_approval_response(approval_id, action, approver):
                 )
                 
                 # Notify bot of failure
+                # Extract resource data based on request type
+                request_data = {}
+                callback_params = approval.get('callback_params', {})
+                
+                if callback_params.get('ssoGroupRequest'):
+                    request_data = callback_params['ssoGroupRequest']
+                elif callback_params.get('mailbox_email'):
+                    request_data = {
+                        'mailbox_email': callback_params.get('mailbox_email'),
+                        'user_email': callback_params.get('user_email')
+                    }
+                
                 notify_bot_approval_processed(
                     approval_id=approval_id,
                     status='approved',
                     result_message=result_message,
-                    slack_context=approval.get('callback_params', {}).get('emailData', {}).get('slackContext', {}),
-                    interaction_id=approval.get('callback_params', {}).get('interaction_id'),
+                    slack_context=callback_params.get('emailData', {}).get('slackContext', {}),
+                    interaction_id=callback_params.get('interaction_id'),
                     approver=approver,
-                    request_data=approval.get('callback_params', {}).get('ssoGroupRequest', {})
+                    request_data=request_data
                 )
         
         return True

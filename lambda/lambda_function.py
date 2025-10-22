@@ -2130,23 +2130,32 @@ def lambda_handler(event, context):
                     )
                     print(f"✅ Updated interaction {interaction_id} with approval status: {status}")
                     
-                    # Add approval and result messages to conversation history
+                    # Extract resource details
+                    resource_name = event.get('resource_name') or event.get('group_name') or event.get('mailbox_email', '')
+                    user_email = event.get('user_email', '')
+                    action_taken = event.get('action_taken', '')
                     channel = slack_context.get('channel')
-                    resource_name = event.get('resource_name', event.get('group_name', ''))
                     
-                    # Add approval message
-                    approval_msg = f"✅ Approved by {approver}" + (f" for {resource_name}" if resource_name else "")
+                    # Add detailed approval message
+                    approval_msg = f"✅ Request approved by {approver}"
+                    if resource_name:
+                        approval_msg += f" for {resource_name}"
                     update_conversation(conv['interaction_id'], conv['timestamp'], approval_msg, from_bot=True)
                     
-                    # Add result message
-                    if 'already' in result_message.lower() or 'Already a member' in event.get('action_taken', ''):
-                        result_msg = f"ℹ️ You already have access. No changes needed!"
+                    # Add detailed result message
+                    if 'already' in result_message.lower() or 'Already a member' in action_taken:
+                        result_msg = f"ℹ️ You already have access to {resource_name}. No changes needed."
                     elif 'Failed' in result_message or 'failed' in result_message.lower():
-                        result_msg = f"❌ {result_message}"
+                        result_msg = f"❌ Request failed: {result_message}"
                     else:
-                        result_msg = f"✅ Access granted successfully!"
+                        result_msg = f"✅ Access granted to {resource_name} successfully!"
                     
                     update_conversation(conv['interaction_id'], conv['timestamp'], result_msg, from_bot=True)
+                    
+                    # Send Slack notification to user
+                    if channel:
+                        send_slack_message(channel, result_msg)
+                    
                     print(f"📝 Added approval and result messages to conversation history")
                 else:
                     print(f"⚠️ No active conversation found for interaction_id: {interaction_id}")
