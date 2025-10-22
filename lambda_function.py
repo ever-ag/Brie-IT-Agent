@@ -1687,7 +1687,7 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                         'similar_groups': [g['name'] for g in dl_matches],
                         'action': 'add',
                         'channel': channel,
-                        'thread_ts': slack_event.get('ts', ''),
+                        'thread_ts': thread_ts,
                         'type': 'DISTRIBUTION_LIST'
                     }
                 })
