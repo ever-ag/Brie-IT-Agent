@@ -2811,65 +2811,108 @@ def lambda_handler(event, context):
                             # Delete pending selection
                             actions_table.delete_item(Key={'action_id': pending['action_id']})
                             
+                            # Check the type of request
+                            request_type = pending['details'].get('type', 'SSO_GROUP')
+                            
                             # Bypass action processor - we already have the exact group name
                             # Directly create approval request
                             lambda_client = boto3.client('lambda')
                             
                             request_details = {
-                                'user_email': user_email,  # Use actual user email, not "me"
+                                'user_email': user_email,
                                 'group_name': matched_group,
                                 'action': 'add',
                                 'requester': user_email
                             }
                             
-                            email_data = {
-                                'sender': user_email,
-                                'subject': f'SSO Group Access Request: {matched_group}',
-                                'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
-                                'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
-                                'source': 'it-helpdesk-bot'
-                            }
-                            
-                            approval_response = lambda_client.invoke(
-                                FunctionName='it-approval-system',
-                                InvocationType='Event',
-                                Payload=json.dumps({
-                                    "action": "create_approval",
-                                    "approvalType": "SSO_GROUP",
-                                    "requester": user_email,
-                                    "ssoGroupRequest": request_details,
-                                    "emailData": email_data,
-                                    "details": f"User: {user_email}\nGroup: {matched_group}\nAction: add",
-                                    "callback_function": "brie-ad-group-manager",
-                                    "callback_params": {
+                            if request_type == 'DISTRIBUTION_LIST':
+                                email_data = {
+                                    'sender': user_email,
+                                    'subject': f'Distribution List Access Request: {matched_group}',
+                                    'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
+                                    'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
+                                    'source': 'it-helpdesk-bot',
+                                    'slackContext': {
+                                        'channel': channel,
+                                        'thread_ts': slack_event.get('ts', ''),
+                                        'user_name': user_name,
+                                        'user_id': user_id
+                                    }
+                                }
+                                
+                                approval_response = lambda_client.invoke(
+                                    FunctionName='it-approval-system',
+                                    InvocationType='Event',
+                                    Payload=json.dumps({
+                                        "action": "create_approval",
+                                        "approvalType": "DISTRIBUTION_LIST",
+                                        "requester": user_email,
+                                        "request_type": "Distribution List Access",
+                                        "details": f"User: {user_email}\nDistribution List: {matched_group}\nAction: Add",
+                                        "callback_function": "brie-infrastructure-connector",
+                                        "callback_params": {
+                                            "action": "add_user_to_group",
+                                            "user_email": user_email,
+                                            "group_name": matched_group,
+                                            "emailData": email_data,
+                                            "interaction_id": str(conv_data.get('interaction_id')) if conv_data.get('interaction_id') else None,
+                                            "timestamp": int(conv_data.get('timestamp')) if conv_data.get('timestamp') else None
+                                        }
+                                    })
+                                )
+                                msg = f"✅ Your distribution list request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+                            else:
+                                # SSO Group
+                                email_data = {
+                                    'sender': user_email,
+                                    'subject': f'SSO Group Access Request: {matched_group}',
+                                    'body': f'User {user_name} ({user_email}) requests access to {matched_group}',
+                                    'messageId': f'slack_{channel}_{int(datetime.utcnow().timestamp())}',
+                                    'source': 'it-helpdesk-bot'
+                                }
+                                
+                                approval_response = lambda_client.invoke(
+                                    FunctionName='it-approval-system',
+                                    InvocationType='Event',
+                                    Payload=json.dumps({
+                                        "action": "create_approval",
+                                        "approvalType": "SSO_GROUP",
+                                        "requester": user_email,
                                         "ssoGroupRequest": request_details,
                                         "emailData": email_data,
-                                        "interaction_id": str(conv_data.get('interaction_id')) if conv_data.get('interaction_id') else None,
-                                        "timestamp": int(conv_data.get('timestamp')) if conv_data.get('timestamp') else None
-                                    }
-                                })
-                            )
+                                        "details": f"User: {user_email}\nGroup: {matched_group}\nAction: add",
+                                        "callback_function": "brie-ad-group-manager",
+                                        "callback_params": {
+                                            "ssoGroupRequest": request_details,
+                                            "emailData": email_data,
+                                            "interaction_id": str(conv_data.get('interaction_id')) if conv_data.get('interaction_id') else None,
+                                            "timestamp": int(conv_data.get('timestamp')) if conv_data.get('timestamp') else None
+                                        }
+                                    })
+                                )
+                                
+                                # Create SSO interaction tracking for callback
+                                if conv_data.get('interaction_id'):
+                                    print(f"📝 Creating SSO interaction tracking for {conv_data['interaction_id']}")
+                                    tracking_id = f"sso_tracking_{user_id}_{int(datetime.utcnow().timestamp())}"
+                                    actions_table.put_item(Item={
+                                        'action_id': tracking_id,
+                                        'action_type': 'sso_interaction_tracking',
+                                        'interaction_id': conv_data['interaction_id'],
+                                        'interaction_timestamp': conv_data['timestamp'],
+                                        'user_email': user_email,
+                                        'group_name': matched_group,
+                                        'timestamp': int(datetime.utcnow().timestamp())
+                                    })
+                                    print(f"✅ Created tracking record: {tracking_id}")
+                                
+                                msg = f"✅ Your SSO group request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                             
                             # Mark conversation as awaiting approval
                             conv_data = user_interaction_ids.get(user_id, {})
                             if conv_data.get('interaction_id'):
                                 mark_conversation_awaiting_approval(conv_data['interaction_id'], conv_data['timestamp'])
-                                
-                                # Create SSO interaction tracking for callback
-                                print(f"📝 Creating SSO interaction tracking for {conv_data['interaction_id']}")
-                                tracking_id = f"sso_tracking_{user_id}_{int(datetime.utcnow().timestamp())}"
-                                actions_table.put_item(Item={
-                                    'action_id': tracking_id,
-                                    'action_type': 'sso_interaction_tracking',
-                                    'interaction_id': conv_data['interaction_id'],
-                                    'interaction_timestamp': conv_data['timestamp'],
-                                    'user_email': user_email,
-                                    'group_name': matched_group,
-                                    'timestamp': int(datetime.utcnow().timestamp())
-                                })
-                                print(f"✅ Created tracking record: {tracking_id}")
                             
-                            msg = f"✅ Your SSO group request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
                             send_slack_message(channel, msg)
                             
                             if conv_data.get('interaction_id'):
