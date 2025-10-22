@@ -975,32 +975,29 @@ Disconnect-ExchangeOnline -Confirm:$false
             # Direct DL action format
             user_email = params.get('user_email')
             group_name = params.get('group_name')
-            email_details = params.get('email_details', {})
+            email_data = params.get('emailData', {})
             
             success, message = add_user_to_distribution_group(user_email, group_name)
             
-            # Check if this came from Slack by looking at message_id
-            original_message_id = email_details.get('original_message_id', '')
-            is_slack_request = original_message_id.startswith('slack_')
+            # Check if this came from Slack
+            message_id = email_data.get('messageId', '')
+            is_slack_request = message_id.startswith('slack_')
             
             if is_slack_request:
-                # Slack request - send Slack messages instead of email
-                # Get channel from message_id: slack_CHANNEL_TIMESTAMP
-                parts = original_message_id.split('_')
-                channel = parts[1] if len(parts) > 1 else None
-                user_name = email_details.get('requester', '').split('@')[0]  # Extract name from email
+                # Slack request - send IT channel notification
+                slack_context = email_data.get('slackContext', {})
+                channel = slack_context.get('channel')
                 
-                if channel and success:
+                if success:
                     # Check if user already had access
                     if 'already has access' in message.lower():
-                        user_msg = f"ℹ️ **Already a Member**\n\n{message}"
                         it_msg = f"ℹ️ **Already a Member**\n\nUser: {user_email}\nDistribution List: {group_name}\n{message}"
                     else:
-                        user_msg = f"✅ **Request Completed!**\n\n{message}"
-                        it_msg = f"✅ **Request Completed**\n\nUser: {user_email}\nDistribution List: {group_name}\nAction: Added\nApproved by: {email_details.get('approver', 'Unknown')}"
-                    
-                    send_slack_message(channel, user_msg)
-                    send_slack_message(IT_APPROVAL_CHANNEL, it_msg)
+                        it_msg = f"✅ **Request Completed**\n\nUser: {user_email}\nDistribution List: {group_name}\nAction: Added"
+                else:
+                    it_msg = f"❌ **Request Failed**\n\nUser: {user_email}\nDistribution List: {group_name}\nError: {message}"
+                
+                send_slack_message(IT_APPROVAL_CHANNEL, it_msg)
                     
                     # Send callback to it-helpdesk-bot to update conversation
                     try:
