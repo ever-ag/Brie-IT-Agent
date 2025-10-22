@@ -120,19 +120,27 @@ def lambda_handler(event, context):
             approval_info = event.get('approvalInfo', {})
             approval_id = approval_info.get('approval_id', 'N/A')
         
-        user_email = sso_request.get('user_email')
+        # Support both single user (string) and multiple users (array)
+        user_emails_raw = sso_request.get('user_emails') or sso_request.get('user_email')
+        if isinstance(user_emails_raw, str):
+            user_emails = [user_emails_raw]
+        elif isinstance(user_emails_raw, list):
+            user_emails = user_emails_raw
+        else:
+            user_emails = []
+        
         group_name = sso_request.get('group_name')
         action = sso_request.get('action', 'add')
         requester = sso_request.get('requester')
         
         print(f"🔍 SSO Request Details:")
-        print(f"user_email: {user_email}")
+        print(f"user_emails: {user_emails} (batch of {len(user_emails)})")
         print(f"group_name: {group_name}")
         print(f"action: {action}")
         print(f"requester: {requester}")
         
-        if not user_email:
-            error_msg = "ERROR: user_email is missing from SSO request"
+        if not user_emails:
+            error_msg = "ERROR: user_email/user_emails is missing from SSO request"
             print(f"❌ {error_msg}")
             return {
                 'statusCode': 400,
@@ -155,10 +163,15 @@ def lambda_handler(event, context):
         
         approved_at = approval_info.get('timestamp', int(time.time()))
         
-        # PowerShell script to add/remove user from AD group
-        ps_command = 'Add-ADGroupMember' if action == 'add' else 'Remove-ADGroupMember'
-        
-        ps_script = f"""
+        # Process each user
+        results = []
+        for user_email in user_emails:
+            print(f"Processing user: {user_email}")
+            
+            # PowerShell script to add/remove user from AD group
+            ps_command = 'Add-ADGroupMember' if action == 'add' else 'Remove-ADGroupMember'
+            
+            ps_script = f"""
 $ErrorActionPreference = "Stop"
 
 try {{
@@ -205,39 +218,51 @@ try {{
     exit 1
 }}
 """
-        
-        # Execute on domain controller
-        response = ssm.send_command(
-            InstanceIds=[BESPIN_INSTANCE_ID],
-            DocumentName='AWS-RunPowerShellScript',
-            Parameters={'commands': [ps_script]},
-            TimeoutSeconds=30
-        )
-        
-        command_id = response['Command']['CommandId']
-        print(f"Execution command ID: {command_id}")
-        
-        # Wait for completion
-        for _ in range(10):
-            time.sleep(2)
-            result = ssm.get_command_invocation(
-                CommandId=command_id,
-                InstanceId=BESPIN_INSTANCE_ID
+            
+            # Execute on domain controller
+            response = ssm.send_command(
+                InstanceIds=[BESPIN_INSTANCE_ID],
+                DocumentName='AWS-RunPowerShellScript',
+                Parameters={'commands': [ps_script]},
+                TimeoutSeconds=30
             )
             
-            if result['Status'] in ['Success', 'Failed']:
-                break
+            command_id = response['Command']['CommandId']
+            print(f"Execution command ID for {user_email}: {command_id}")
+            
+            # Wait for completion
+            for _ in range(10):
+                time.sleep(2)
+                result = ssm.get_command_invocation(
+                    CommandId=command_id,
+                    InstanceId=BESPIN_INSTANCE_ID
+                )
+                
+                if result['Status'] in ['Success', 'Failed']:
+                    break
+            
+            output = result.get('StandardOutputContent', '').strip()
+            error_output = result.get('StandardErrorContent', '').strip()
+            
+            print(f"Execution output for {user_email}: {output}")
+            
+            # Check result
+            already_member = 'already a member' in output.lower()
+            success = 'SUCCESS:' in output or already_member
+            
+            results.append({
+                'user_email': user_email,
+                'success': success,
+                'output': output,
+                'already_member': already_member
+            })
         
-        output = result.get('StandardOutputContent', '').strip()
-        error_output = result.get('StandardErrorContent', '').strip()
+        # Determine overall success
+        all_success = all(r['success'] for r in results)
+        failed_users = [r['user_email'] for r in results if not r['success']]
         
-        print(f"Execution output: {output}")
-        
-        # Check for already-a-member
-        already_member = 'already a member' in output.lower()
-        success = 'SUCCESS:' in output or already_member
-        
-        # Check if group not found and search for similar groups
+        # Check if group not found (from first result)
+        output = results[0]['output'] if results else ""
         source = email_data.get('source')
         group_not_found = 'Group not found in AD' in output
         suggestions_sent = False
@@ -290,7 +315,7 @@ try {{
             'action_id': f"sso_{approval_id}_{int(time.time())}",
             'action_type': f"sso_group_{action}",
             'details': {
-                'user_email': user_email,
+                'user_emails': user_emails,
                 'group_name': group_name,
                 'action': action,
                 'requester': requester,
@@ -373,25 +398,29 @@ try {{
                 send_slack_message(channel, user_message)
                 
                 # Post to IT channel
-                status = "Already a member" if already_member else "Added"
-                it_message = f"✅ **Request Completed**\n\nUser: {user_email}\nGroup: {group_name}\nAction: {status}\nApproved by: {approved_by}"
+                status = "Already a member" if results[0]['already_member'] else "Added"
+                user_list = ", ".join(user_emails)
+                it_message = f"✅ **Request Completed**\n\nUsers: {user_list}\nGroup: {group_name}\nAction: {status}\nApproved by: {approved_by}"
+                if failed_users:
+                    it_message += f"\n\n⚠️ Failed: {', '.join(failed_users)}"
                 send_slack_message(IT_APPROVAL_CHANNEL, it_message)
                 print(f"Slack notifications sent to user and IT channel")
             else:
                 # Only send error message if suggestions were NOT sent
                 if not suggestions_sent:
-                    user_message = f"❌ **Request Failed**\n\nUnable to add you to **{group_name}**.\n\nError: {output}\n\nPlease contact IT for assistance."
+                    user_message = f"❌ **Request Failed**\n\nUnable to add users to **{group_name}**.\n\nFailed users: {', '.join(failed_users)}\n\nPlease contact IT for assistance."
                     send_slack_message(channel, user_message)
                     
                     # Post to IT channel
-                    it_message = f"❌ **Request Failed**\n\nUser: {user_email}\nGroup: {group_name}\nError: {output}"
+                    it_message = f"❌ **Request Failed**\n\nUsers: {', '.join(user_emails)}\nGroup: {group_name}\nFailed: {', '.join(failed_users)}"
                     send_slack_message(IT_APPROVAL_CHANNEL, it_message)
                     print(f"Slack error notifications sent")
         
         return {
-            'statusCode': 200,
-            'success': success,
-            'message': output if success else error_output,
+            'statusCode': 200 if all_success else 400,
+            'success': all_success,
+            'message': f"Processed {len(user_emails)} users: {len(user_emails) - len(failed_users)} succeeded, {len(failed_users)} failed",
+            'results': results,
             'ssoGroupRequest': sso_request,
             'emailData': email_data
         }
