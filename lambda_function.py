@@ -1623,63 +1623,116 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
             return True
         
         elif automation_type == 'DISTRIBUTION_LIST':
-            # BYPASS: Skip it-action-processor for DL, handle directly like SSO
             import re
             
-            # Extract user and group from message
-            user_match = re.search(r'add\s+([^to]+?)\s+to', clean_message, re.IGNORECASE)
+            # Extract group name from message
             group_match = re.search(r'to\s+(?:the\s+)?(.+?)(?:\s+dl)?$', clean_message, re.IGNORECASE)
+            if not group_match:
+                return False
             
-            if user_match and group_match:
-                target_user = user_match.group(1).strip()
-                target_group = group_match.group(1).strip()
-                
-                # If user says "me", use their actual email
-                if target_user.lower() == 'me':
-                    target_email = user_email
-                else:
-                    target_email = f"{target_user.lower().replace(' ', '.')}@ever.ag"
-                
-                request_details = {
-                    'user_email': target_email,
-                    'group_name': target_group,
-                    'action': 'add',
-                    'requester': user_email
-                }
-                print(f"✅ Direct DL extraction: {request_details}")
-                
-                # Send approval request directly
-                msg = "✅ Your distribution list request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+            group_search = group_match.group(1).strip()
+            print(f"Searching for distribution list: {group_search}")
+            
+            # Search AD/O365 for matching distribution lists
+            import threading
+            search_complete = threading.Event()
+            
+            def send_progress_message():
+                if not search_complete.wait(5):
+                    msg = "🔍 Searching for distribution lists..."
+                    send_slack_message(channel, msg)
+                    if interaction_id and timestamp:
+                        update_conversation(interaction_id, timestamp, msg, from_bot=True)
+            
+            progress_thread = threading.Thread(target=send_progress_message)
+            progress_thread.start()
+            
+            matches = query_group_type(group_search)
+            search_complete.set()
+            
+            if not matches:
+                msg = f"❌ No distribution lists found matching '{group_search}'"
                 send_slack_message(channel, msg)
-                
+                if interaction_id and timestamp:
+                    update_conversation(interaction_id, timestamp, msg, from_bot=True)
+                return False
+            
+            # Filter to only distribution lists
+            dl_matches = [m for m in matches if m['type'] == 'DISTRIBUTION_LIST']
+            
+            if not dl_matches:
+                msg = f"❌ No distribution lists found matching '{group_search}'. Found SSO groups instead."
+                send_slack_message(channel, msg)
+                if interaction_id and timestamp:
+                    update_conversation(interaction_id, timestamp, msg, from_bot=True)
+                return False
+            
+            if len(dl_matches) > 1:
+                # Multiple matches - ask user to select
+                group_list = "\n".join([f"• {g['name']}" for g in dl_matches])
+                msg = f"🔍 Found multiple distribution lists matching '{group_search}':\n\n{group_list}\n\nPlease reply with the exact list name you want."
+                send_slack_message(channel, msg)
                 if interaction_id and timestamp:
                     update_conversation(interaction_id, timestamp, msg, from_bot=True)
                 
-                approval_response = lambda_client.invoke(
-                    FunctionName='it-approval-system',
-                    InvocationType='Event',
-                    Payload=json.dumps({
-                        "action": "create_approval",
-                        "approvalType": "DISTRIBUTION_LIST",
-                        "requester": user_email,
-                        "request_type": "Distribution List Access",
-                        "details": f"User: {target_email}\nDistribution List: {target_group}\nAction: Add",
-                        "callback_function": "brie-infrastructure-connector",
-                        "callback_params": {
-                            "action": "add_user_to_group",
-                            "user_email": target_email,
-                            "group_name": target_group,
-                            "emailData": email_data,
-                            "interaction_id": str(interaction_id) if interaction_id else None,
-                            "timestamp": int(timestamp) if timestamp else None
-                        }
-                    })
-                )
-                print(f"✅ DL approval created for {target_group}")
+                # Store pending selection
+                table = dynamodb.Table('it-actions')
+                table.put_item(Item={
+                    'action_id': f"pending_selection_{user_email}_{int(datetime.utcnow().timestamp())}",
+                    'requester': user_email,
+                    'status': 'PENDING_SELECTION',
+                    'timestamp': int(datetime.utcnow().timestamp()),
+                    'pending_selection': True,
+                    'details': {
+                        'similar_groups': [g['name'] for g in dl_matches],
+                        'action': 'add',
+                        'channel': channel,
+                        'thread_ts': slack_event.get('ts', ''),
+                        'type': 'DISTRIBUTION_LIST'
+                    }
+                })
                 return True
-            else:
-                print("❌ Could not extract DL request details")
-                return False
+            
+            # Single match - proceed to approval
+            exact_dl = dl_matches[0]['name']
+            
+            # Check membership first
+            membership_status = check_membership(user_email, exact_dl)
+            if membership_status == "ALREADY_MEMBER":
+                msg = f"ℹ️ You're already a member of **{exact_dl}**. No changes needed!"
+                send_slack_message(channel, msg)
+                if interaction_id and timestamp:
+                    update_conversation(interaction_id, timestamp, msg, from_bot=True)
+                return True
+            
+            # Create approval
+            msg = "✅ Your distribution list request is being processed. IT will review and approve shortly.\n\nWhile IT reviews this, I can still help you with other needs. Just ask!"
+            send_slack_message(channel, msg)
+            if interaction_id and timestamp:
+                update_conversation(interaction_id, timestamp, msg, from_bot=True)
+            
+            lambda_client.invoke(
+                FunctionName='it-approval-system',
+                InvocationType='Event',
+                Payload=json.dumps({
+                    "action": "create_approval",
+                    "approvalType": "DISTRIBUTION_LIST",
+                    "requester": user_email,
+                    "request_type": "Distribution List Access",
+                    "details": f"User: {user_email}\nDistribution List: {exact_dl}\nAction: Add",
+                    "callback_function": "brie-infrastructure-connector",
+                    "callback_params": {
+                        "action": "add_user_to_group",
+                        "user_email": user_email,
+                        "group_name": exact_dl,
+                        "emailData": email_data,
+                        "interaction_id": str(interaction_id) if interaction_id else None,
+                        "timestamp": int(timestamp) if timestamp else None
+                    }
+                })
+            )
+            print(f"✅ DL approval created for {exact_dl}")
+            return True
         
         else:
             # DL and Mailbox requests - check if approval was already sent
