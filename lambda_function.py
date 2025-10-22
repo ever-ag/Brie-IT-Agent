@@ -1691,7 +1691,7 @@ def trigger_automation_workflow(user_email, user_name, message, channel, thread_
                         'type': 'DISTRIBUTION_LIST'
                     }
                 })
-                return True
+                return 'PENDING_SELECTION'
             
             # Single match - proceed to approval
             exact_dl = dl_matches[0]['name']
