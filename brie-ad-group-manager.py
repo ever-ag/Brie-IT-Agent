@@ -418,9 +418,11 @@ try {{
         
         return {
             'statusCode': 200 if all_success else 400,
-            'success': all_success,
-            'message': f"Processed {len(user_emails)} users: {len(user_emails) - len(failed_users)} succeeded, {len(failed_users)} failed",
-            'results': results,
+            'body': json.dumps({
+                'success': all_success,
+                'message': f"Processed {len(user_emails)} users: {len(user_emails) - len(failed_users)} succeeded, {len(failed_users)} failed",
+                'results': results
+            }),
             'ssoGroupRequest': sso_request,
             'emailData': email_data
         }
@@ -429,6 +431,8 @@ try {{
         print(f"Error executing SSO group operation: {e}")
         return {
             'statusCode': 500,
-            'success': False,
-            'error': str(e)
+            'body': json.dumps({
+                'success': False,
+                'error': str(e)
+            })
         }
