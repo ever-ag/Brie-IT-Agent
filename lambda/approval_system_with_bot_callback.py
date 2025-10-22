@@ -152,11 +152,17 @@ def process_approval_response(approval_id, action, approver):
                 response_payload = json.loads(response['Payload'].read())
                 print(f"🔍 Callback response: {response_payload}")
                 
-                # Extract the actual result
+                # Extract the actual result - handle both formats
                 if response_payload.get('statusCode') == 200:
-                    body = json.loads(response_payload.get('body', '{}'))
-                    success = body.get('success', False)
-                    message = body.get('message', 'Unknown result')
+                    # Check if body exists (brie-infrastructure-connector format)
+                    if 'body' in response_payload:
+                        body = json.loads(response_payload.get('body', '{}'))
+                        success = body.get('success', False)
+                        message = body.get('message', 'Unknown result')
+                    else:
+                        # Direct format (brie-ad-group-manager format)
+                        success = response_payload.get('success', False)
+                        message = response_payload.get('message', 'Unknown result')
                 else:
                     success = False
                     message = f"Execution failed with status {response_payload.get('statusCode')}"
@@ -174,25 +180,33 @@ def process_approval_response(approval_id, action, approver):
                 
                 print(f"📧 Execution result email sent: {success} - {message}")
                 
-                # **NOTIFY BOT OF COMPLETION**
-                # Extract resource data based on request type
+                # Extract resource data and slack context based on request type
                 request_data = {}
                 callback_params = approval.get('callback_params', {})
                 
                 if callback_params.get('ssoGroupRequest'):
                     request_data = callback_params['ssoGroupRequest']
+                    slack_context = callback_params.get('emailData', {}).get('slackContext', {})
                 elif callback_params.get('mailbox_email'):
                     # Shared mailbox request
                     request_data = {
                         'mailbox_email': callback_params.get('mailbox_email'),
                         'user_email': callback_params.get('user_email')
                     }
+                    # For shared mailboxes, channel is in callback_params directly
+                    slack_context = {
+                        'channel': callback_params.get('channel'),
+                        'thread_ts': callback_params.get('thread_ts')
+                    }
+                else:
+                    slack_context = callback_params.get('emailData', {}).get('slackContext', {})
                 
+                # **NOTIFY BOT OF COMPLETION**
                 notify_bot_approval_processed(
                     approval_id=approval_id,
                     status='approved',
                     result_message=result_message,
-                    slack_context=callback_params.get('emailData', {}).get('slackContext', {}),
+                    slack_context=slack_context,
                     interaction_id=callback_params.get('interaction_id'),
                     approver=approver,
                     request_data=request_data
@@ -212,23 +226,30 @@ def process_approval_response(approval_id, action, approver):
                 )
                 
                 # Notify bot of failure
-                # Extract resource data based on request type
+                # Extract resource data and slack context based on request type
                 request_data = {}
                 callback_params = approval.get('callback_params', {})
                 
                 if callback_params.get('ssoGroupRequest'):
                     request_data = callback_params['ssoGroupRequest']
+                    slack_context = callback_params.get('emailData', {}).get('slackContext', {})
                 elif callback_params.get('mailbox_email'):
                     request_data = {
                         'mailbox_email': callback_params.get('mailbox_email'),
                         'user_email': callback_params.get('user_email')
                     }
+                    slack_context = {
+                        'channel': callback_params.get('channel'),
+                        'thread_ts': callback_params.get('thread_ts')
+                    }
+                else:
+                    slack_context = callback_params.get('emailData', {}).get('slackContext', {})
                 
                 notify_bot_approval_processed(
                     approval_id=approval_id,
                     status='approved',
                     result_message=result_message,
-                    slack_context=callback_params.get('emailData', {}).get('slackContext', {}),
+                    slack_context=slack_context,
                     interaction_id=callback_params.get('interaction_id'),
                     approver=approver,
                     request_data=request_data
