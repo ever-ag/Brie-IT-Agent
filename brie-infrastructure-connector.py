@@ -665,7 +665,8 @@ def lambda_handler(event, context):
     print(f"🔍 DEBUG: Action = {action}")
     
     if action == 'add_user_to_group':
-        user_email = event.get('user_email')
+        # Support both user_emails (array) and user_email (string) for backwards compatibility
+        user_email = event.get('user_emails', [None])[0] if event.get('user_emails') else event.get('user_email')
         group_name = event.get('group_name')
         
         success, message = add_user_to_distribution_group(user_email, group_name)
