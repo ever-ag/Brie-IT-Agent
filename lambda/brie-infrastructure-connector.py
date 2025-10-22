@@ -820,6 +820,28 @@ Disconnect-ExchangeOnline -Confirm:$false
             
             if 'ALREADY_HAS_ACCESS' in output:
                 print(f"✅ User already has access")
+                
+                # Send IT channel notification
+                try:
+                    IT_CHANNEL = "C09KB40PL9J"
+                    SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
+                    it_message = f"ℹ️ **Request Completed**\n\nUser: {user_email}\nShared Mailbox: {mailbox_email}\nAction: Already has access"
+                    
+                    slack_data = {
+                        'channel': IT_CHANNEL,
+                        'text': it_message,
+                        'as_user': True
+                    }
+                    req = urllib.request.Request(
+                        'https://slack.com/api/chat.postMessage',
+                        data=json.dumps(slack_data).encode('utf-8'),
+                        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                    )
+                    with urllib.request.urlopen(req) as response:
+                        print(f"📤 IT channel notification sent")
+                except Exception as e:
+                    print(f"⚠️ Failed to send IT channel notification: {e}")
+                
                 return {
                     'statusCode': 200,
                     'body': json.dumps({
@@ -856,6 +878,27 @@ Disconnect-ExchangeOnline -Confirm:$false
                 )
                 
                 if result['Status'] in ['Success', 'InProgress']:
+                    # Send IT channel notification
+                    try:
+                        IT_CHANNEL = "C09KB40PL9J"
+                        SLACK_BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN', '')
+                        it_message = f"✅ **Request Completed**\n\nUser: {user_email}\nShared Mailbox: {mailbox_email}\nAction: Access granted"
+                        
+                        slack_data = {
+                            'channel': IT_CHANNEL,
+                            'text': it_message,
+                            'as_user': True
+                        }
+                        req = urllib.request.Request(
+                            'https://slack.com/api/chat.postMessage',
+                            data=json.dumps(slack_data).encode('utf-8'),
+                            headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                        )
+                        with urllib.request.urlopen(req) as response:
+                            print(f"📤 IT channel notification sent")
+                    except Exception as e:
+                        print(f"⚠️ Failed to send IT channel notification: {e}")
+                    
                     return {
                         'statusCode': 200,
                         'body': json.dumps({
